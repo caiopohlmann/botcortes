@@ -1,0 +1,29 @@
+{% from "_macros.html" import requests_list with context %}
+{% if assistant_enabled %}
+<h2>Pedir ao Claude</h2>
+<p class="muted small">Escolha o corte e diga o que quer mudar: corrigir uma palavra da legenda, cortar o começo, trocar o título… O Claude Code deste PC faz o ajuste em segundo plano e gera o vídeo de novo.</p>
+{% if recent_all %}
+<form class="ask" method="post" action="/assistente" data-json data-reset>
+  <label class="small" for="ask-clip">Corte</label>
+  <select id="ask-clip" name="clip_id">
+    {% for clip in recent_all %}
+    <option value="{{ clip.id }}">{{ clip.created }} · {{ clip.channel }} · nota {{ clip.score }} · {{ clip.grade_label }}</option>
+    {% endfor %}
+  </select>
+  <label class="small" for="ask-message">O que fazer</label>
+  <textarea id="ask-message" name="message" rows="3" required maxlength="2000"
+            placeholder="ex.: troca &quot;jogou&quot; por &quot;pulou&quot; na legenda e corta os 3 primeiros segundos"></textarea>
+  <div class="ask-actions">
+    <button type="submit" class="btn-primary">Enviar para o Claude</button>
+    <span class="small" data-result></span>
+  </div>
+</form>
+{% else %}
+<p class="muted">Quando houver cortes, eles aparecem aqui para escolher.</p>
+{% endif %}
+
+{% if assistant %}
+<h3>Últimos pedidos</h3>
+{{ requests_list(assistant) }}
+{% endif %}
+{% endif %}

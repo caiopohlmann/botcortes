@@ -1,0 +1,51 @@
+{% from "_macros.html" import spark with context %}
+<h2>Cortes <a class="small section-link" href="/arquivos?p=pending">abrir pastas</a></h2>
+<div class="stats">
+  <div class="stat"><span class="stat-value">{{ counts.today }}</span><span class="stat-label">hoje</span></div>
+  <div class="stat"><span class="stat-value">{{ counts.week }}</span><span class="stat-label">últimos 7 dias</span></div>
+  <div class="stat"><span class="stat-value">{{ counts.total }}</span><span class="stat-label">no total</span></div>
+  <div class="stat"><span class="stat-value tone-text-ok">{{ counts.caption_good }}</span><span class="stat-label">legenda boa (hoje)</span></div>
+  <div class="stat"><span class="stat-value tone-text-warn">{{ counts.caption_review }}</span><span class="stat-label">revisar legenda (hoje)</span></div>
+  <div class="stat"><span class="stat-value tone-text-bad">{{ counts.caption_bad }}</span><span class="stat-label">legenda ruim (hoje)</span></div>
+  <div class="stat"><span class="stat-value">{{ counts.moments_today }}</span><span class="stat-label">picos detectados hoje</span></div>
+  <div class="stat"><span class="stat-value">{{ counts.rejected_today }}</span><span class="stat-label">descartados hoje (nota baixa)</span></div>
+  <div class="stat"><span class="stat-value {{ 'tone-text-bad' if counts.failed_today else '' }}">{{ counts.failed_today }}</span><span class="stat-label">com erro hoje</span></div>
+</div>
+<div class="charts">{{ spark(charts.clips, "Cortes por hora") }}</div>
+
+<h3>Últimos cortes</h3>
+{% if recent %}
+<ul class="clips">
+  {% for clip in recent %}
+  <li>
+    <details>
+      <summary>
+        <span class="score">nota {{ clip.score }}</span>
+        <strong>{{ clip.channel }}</strong>
+        <span class="badge tone-{{ clip.grade_tone }}">{{ clip.grade_label }}</span>
+        <span class="muted small">{{ clip.created }} · {{ clip.duration }} · {{ clip.ago }}</span>
+      </summary>
+      <div class="clip-body">
+        <video src="/clips/{{ clip.id }}/video" controls preload="none" playsinline></video>
+        <div>
+          <p class="small">“{{ clip.transcript or "sem fala" }}”</p>
+          {% if clip.notes %}
+          <ul class="notes">{% for note in clip.notes %}<li class="tone-text-{{ clip.grade_tone }}">{{ note }}</li>{% endfor %}</ul>
+          {% endif %}
+          {% if clip.doubts %}<p class="small">Palavras duvidosas: {{ clip.doubts | join(", ") }}</p>{% endif %}
+          <p class="muted small">confiança da legenda {{ clip.caption_score }}% · chat {{ clip.chat }} · áudio {{ clip.audio }} · processado em {{ clip.processing }}</p>
+          <p class="small">
+            <a href="/clips/{{ clip.id }}/video" download>baixar vídeo</a> ·
+            <a href="/clips/{{ clip.id }}/description" target="_blank">descrição</a> ·
+            <a href="/arquivos?p={{ q(clip.folder_rel) }}">abrir a pasta</a>
+          </p>
+          <p class="muted small">{{ clip.folder_rel }}/{{ clip.file.split("/")[-1] }}</p>
+        </div>
+      </div>
+    </details>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted">Nenhum corte ainda.</p>
+{% endif %}

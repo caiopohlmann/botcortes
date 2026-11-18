@@ -1,0 +1,258 @@
+# Configuração principal (perfil prod: PC Windows + RTX).
+# O perfil é escolhido por CORTES_PROFILE no .env; config/settings.<perfil>.yaml
+# sobrescreve só as chaves que definir (merge recursivo; listas são substituídas).
+
+paths:
+  data_dir: data                # buffers, work, clips, logs e o banco SQLite
+  min_free_gb: 20               # abaixo disso de espaço livre, para de capturar clipes novos
+
+logging:
+  level: INFO
+  # >0 registra o sinal do chat a cada N segundos. Use 5-10 nas primeiras lives para
+  # calibrar trigger_score/z_trigger olhando os números reais dos seus canais.
+  signal_log_interval_s: 0
+
+# ---------------------------------------------------------------- lives e plataformas
+monitor:
+  poll_interval_s: 30           # checa quem está ao vivo a cada N s
+  offline_grace_polls: 2        # 2 polls offline seguidos (~1 min) antes de parar a gravação
+  # Ex.: ["Grand Theft Auto VI"]. Vazio = grava qualquer jogo. Use o nome exato de cada
+  # plataforma. O YouTube não informa o jogo: canais do YouTube não são filtrados.
+  game_filter: []
+
+twitch:                         # status pela API oficial (TWITCH_CLIENT_ID/SECRET no .env)
+  disable_ads: true             # pula anúncios (o buffer fica sem vídeo durante eles)
+  low_latency: true
+  # Sem anúncios: conta com Turbo ou inscrita no canal -> TWITCH_OAUTH_TOKEN no .env
+  # (nunca aqui: este arquivo vai para o git). Ver README, "Anúncios da Twitch".
+  streamlink_args: []
+  chat_delay_s: 0
+
+kick:                           # status e chat "como navegador", sem conta
+  # WebSocket do chat (o mesmo da página). Se o chat do Kick parar com "Pusher recusou",
+  # abra kick.com com o DevTools (Network -> WS), copie a URL do ws-*.pusher.com e cole aqui.
+  pusher_url: "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0&flash=false"
+  streamlink_args: []
+  chat_delay_s: 0
+
+youtube:                        # status e chat "como navegador", sem chave de API
+  check_interval_s: 60          # abre a página /live de cada canal no máximo 1x por minuto
+  chat_poll_min_s: 1
+  chat_poll_max_s: 2
+  chat_delay_s: 3               # o chat chega em lotes: a análise roda 3 s "atrasada"
+  chat_max_age_s: 30
+  streamlink_args: []           # ex.: ["--http-cookie", "..."] para lives com restrição
+
+recording:
+  streamlink_path: null         # null = python -m streamlink do próprio ambiente
+  ffmpeg_path: ffmpeg
+  quality: "1080p60,1080p,936p60,720p60,best"
+  segment_s: 2                  # duração de cada segmento .ts do buffer
+  buffer_s: 180                 # janela do buffer circular (~3 min)
+  # Sem dados por N s -> reinicia streamlink/ffmpeg. Maior que um intervalo de anúncios
+  # da Twitch: reiniciar no meio do anúncio faz a Twitch mostrar outro.
+  stall_timeout_s: 120
+  extra_streamlink_args: []     # argumentos extras para todas as plataformas
+
+# ---------------------------------------------------------------- detecção pelo chat
+detection:
+  window_s: 5                   # janela deslizante da taxa de mensagens
+  baseline_half_life_s: 300     # "memória" da média móvel do canal
+  warmup_s: 120                 # não dispara clipes antes de conhecer o normal do canal
+  min_rate: 0.5                 # msg/s mínima para considerar um pico
+  min_std: 0.25
+  z_min: 2.0                    # z em que a taxa começa a pontuar
+  z_max: 7.0                    # z em que a taxa satura
+  hype_saturation: 0.5
+  diversity_saturation: 0.6
+  # score = 100 * taxa * (w_rate + w_hype*hype + w_div*diversidade) / soma_dos_pesos
+  weight_rate: 0.5
+  weight_hype: 0.4
+  weight_diversity: 0.1
+  # Silêncio de N s num chat que deveria ter >= gap_min_expected mensagens nesse tempo
+  # = chat caiu (ou modo só-inscritos). A média do canal congela até voltar.
+  gap_s: 30
+  gap_min_expected: 15
+  # Tokens exatos (sem diferenciar maiúsculas). Peso por mensagem, somado e limitado a 1.
+  hype_tokens:
+    KEKW: 1.0
+    OMEGALUL: 1.0
+    LUL: 0.8
+    LULW: 0.9
+    ICANT: 0.9
+    PogChamp: 0.9
+    Pog: 0.8
+    POGGERS: 0.9
+    PogU: 0.9
+    monkaS: 0.6
+    monkaW: 0.7
+    WTF: 0.7
+    LMAO: 0.8
+    CLIP: 1.0
+    CLIPA: 1.0
+    CLIPPED: 1.0
+    MDS: 0.9
+    PQP: 0.8
+    SOCORRO: 0.8
+    NOOO: 0.7
+    GG: 0.4
+    emojiLol: 0.8                 # Kick
+    "😂": 0.8                     # emojis (YouTube/Kick/Twitch)
+    "🤣": 0.8
+    "💀": 0.7
+    "😱": 0.6
+  # Regex aplicada ao token inteiro, para variações de tamanho.
+  hype_patterns:
+    - {pattern: "k{4,}", weight: 0.9}               # kkkk, KKKKKKK
+    - {pattern: "(?:ha){3,}h?", weight: 0.8}        # hahaha
+    - {pattern: "(?:rs){2,}", weight: 0.5}          # rsrs
+    - {pattern: "a{4,}h*", weight: 0.6}             # aaaaah
+    - {pattern: "n[aã]*o{3,}", weight: 0.7}         # nãooo, naooo
+    - {pattern: "\\?{3,}", weight: 0.5}             # ????
+    - {pattern: "m+d+s+", weight: 0.9}              # mddds
+    - {pattern: "clip+(?:a|ed|ou)?", weight: 1.0}   # clippp, clipou
+
+detector:
+  trigger_score: 45             # score do chat que abre um "episódio" de hype
+  release_score: 25             # score que fecha o episódio
+  z_trigger: 3.0                # z mínimo para disparar (além do score)
+  max_episode_s: 30
+  cooldown_s: 90                # sem novos clipes do mesmo canal por N s após um pico
+
+clip:
+  pre_roll_s: 40                # segundos antes do lance
+  post_roll_s: 15               # segundos depois do lance
+  reaction_offset_s: 4          # o pico do chat vem ~N s depois do lance
+
+scoring:                        # nota final (0-100) = chat + áudio
+  chat_weight: 0.7
+  audio_weight: 0.3
+  min_final_score: 40           # abaixo disso o momento é descartado antes da GPU
+
+audio:
+  sample_rate: 16000
+  before_event_s: 10
+  after_event_s: 4
+  range_db: 10                  # subida de volume que vale nota máxima de áudio
+
+# ---------------------------------------------------------------- transcrição e legendas
+transcription:
+  model: large-v3-turbo         # ou large-v3 (mais preciso, ~2x mais lento) / medium
+  device: cuda
+  compute_type: float16
+  beam_size: 5
+  allowed_languages: [pt, en]   # detecção automática restrita a estes idiomas
+  download_root: null           # null = cache padrão do HuggingFace
+  vad_filter: true
+  blocklist: []                 # frases alucinadas extras a descartar
+
+captions:
+  max_words: 3
+  max_chars: 14
+  max_gap_s: 0.6
+  linger_s: 0.3
+  uppercase: true
+
+# Classificação da legenda em 3 pastas (boa / revisar / ruim), pela confiança do Whisper
+# em cada palavra. Calibre olhando os cortes de cada pasta nas primeiras semanas.
+caption_quality:
+  low_word_probability: 0.5     # palavra abaixo disso = "duvidosa"
+  good_max_low_ratio: 0.10      # até 10% de palavras duvidosas -> boa
+  good_min_mean: 0.80           # e confiança média de pelo menos 80%
+  bad_min_low_ratio: 0.30       # mais de 30% duvidosas -> ruim
+  bad_max_mean: 0.60            # ou confiança média abaixo de 60%
+  max_compression_ratio: 2.4    # texto repetitivo demais -> ruim (Whisper em loop)
+  repeat_run: 5                 # mesma palavra 5x seguidas -> ruim
+  min_language_probability: 0.6 # idioma incerto -> revisar
+  max_listed_doubts: 8
+
+caption_style:
+  font: Arial Black             # precisa existir no sistema (ou em render.fonts_dir)
+  size: 80
+  color: "#FFFFFF"
+  highlight_color: "#FFE600"
+  outline_color: "#000000"
+  outline: 6
+  shadow: 2
+  highlight_scale: 112
+  credit_font: Arial
+  credit_size: 40
+  credit_margin_bottom: 110
+
+# ---------------------------------------------------------------- render 9:16
+render:
+  width: 1080
+  height: 1920
+  fps: 30                       # 30 corta pela metade o custo de filtros vs 60
+  hwaccel: cuda                 # decodificação NVDEC
+  video_args: ["-c:v", "h264_nvenc", "-preset", "p5", "-tune", "hq", "-rc", "vbr",
+               "-cq", "21", "-b:v", "0", "-maxrate", "14M", "-bufsize", "28M",
+               "-profile:v", "high", "-g", "60"]
+  audio_bitrate: 160k
+  loudnorm: true                # normaliza para -14 LUFS (padrão das redes)
+  gameplay_width_fraction: 1.0  # 0.75 corta as laterais e deixa o gameplay maior
+  gameplay_lift: 80
+  facecam_top: 70
+  facecam_height: 560
+  caption_gap: 60
+  fonts_dir: null               # pasta com .ttf/.otf extras (ex.: Montserrat)
+  timeout_s: 600
+
+worker:
+  concurrency: 3                # jobs em paralelo
+  gpu_concurrency: 1            # transcrições simultâneas
+  encode_concurrency: 2         # encodes NVENC simultâneos
+  poll_s: 1
+  job_timeout_s: 900
+  max_attempts: 3
+  keep_work_files: false        # true mantém source.ts/subs.ass para depurar
+  work_retention_h: 24          # apaga sobras de jobs com falha em data/work após N horas
+  edit_kit_days: 7              # guarda o kit de edição de cada corte (~45 MB) por N dias
+  gpu_stats_interval_s: 60
+
+# ---------------------------------------------------------------- painel web
+panel:
+  enabled: true                 # `cortes run` sobe o painel junto
+  # 127.0.0.1 = só neste PC (http://127.0.0.1:8080).
+  # 0.0.0.0   = qualquer aparelho da rede de casa (celular); exige PANEL_PASSWORD no .env.
+  host: 127.0.0.1
+  port: 8080
+  refresh_s: 5                  # a página se atualiza sozinha
+  heartbeat_s: 5                # cada processo publica o próprio estado a cada N s
+  metrics_interval_s: 60        # um ponto por minuto nos gráficos de 24 h
+  metrics_retention_days: 7
+  stale_after_s: 30             # sem sinal há N s = processo parado
+
+# ---------------------------------------------------------------- atalho "Pedir ao Claude"
+# No painel, escolha um corte e escreva o que quer ("corrige 'jogou' para 'pulou'", "corta
+# os 5 primeiros segundos"...). O painel chama o Claude Code deste PC em segundo plano
+# (`claude -p`), sem terminal. Ele só pode editar arquivos do projeto e rodar
+# `cortes rerender`, ffmpeg e ffprobe; sem internet. Precisa do Claude Code instalado e logado.
+assistant:
+  enabled: true
+  claude_path: claude
+  model: null                   # null = o modelo padrão da sua conta
+  max_turns: 40
+  timeout_s: 1200
+  allow_ffmpeg: true
+  max_message_chars: 2000
+
+publish:
+  hashtags: ["#gta6", "#gtavi", "#gta", "#shorts"]
+  platform_hashtags:            # somadas conforme a plataforma do canal
+    twitch: ["#twitch"]
+    kick: ["#kick"]
+    youtube: []
+  quality_folders:              # subpastas dentro da pasta de cada criador
+    boa: 1-legenda-boa
+    revisar: 2-legenda-revisar
+    ruim: 3-legenda-ruim
+  title_max_chars: 90
+  # Variáveis: {title} {display_name} {login} {platform} {channel_url} {hashtags}
+  description_template: |
+    {title}
+
+    🎮 Clipe da live de {display_name} - {channel_url}
+    Créditos: {display_name} ({channel_url})
+
+    {hashtags}

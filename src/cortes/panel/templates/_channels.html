@@ -1,0 +1,58 @@
+{% from "_macros.html" import pause_button with context %}
+<h2>Canais</h2>
+<div class="table-wrap">
+<table class="channels">
+  <thead>
+    <tr>
+      <th>Canal</th><th>Estado</th><th>Live</th><th>Chat</th><th>Gravação</th><th>Hoje</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for ch in channels %}
+    <tr>
+      <td data-label="Canal">
+        <strong>{{ ch.name }}</strong>
+        <span class="pill pill-{{ ch.platform_id }}">{{ ch.platform }}</span>
+        <div class="muted small">{{ ch.url }}</div>
+        {% if ch.extra_chats %}<div class="muted small">+ chat: {{ ch.extra_chats | join(", ") }}</div>{% endif %}
+      </td>
+      <td data-label="Estado">
+        <span class="badge tone-{{ ch.tone }}">{{ ch.state_label }}</span>
+        <div class="muted small">checado {{ ch.checked }}</div>
+        {% if ch.error and ch.state == "retrying" %}<div class="tone-text-bad small">{{ ch.error[:120] }}</div>{% endif %}
+      </td>
+      <td data-label="Live">
+        {% if ch.title %}
+          <div class="ellipsis" title="{{ ch.title }}">{{ ch.title }}</div>
+          <div class="muted small">
+            {% if ch.game %}{{ ch.game }} · {% endif %}{% if ch.viewers %}{{ ch.viewers }} assistindo · {% endif %}{% if ch.live_for %}há {{ ch.live_for }}{% endif %}
+          </div>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+      <td data-label="Chat">
+        {% if ch.state == "recording" %}
+          {{ ch.chat_rate }} msg/s <span class="muted small">(normal {{ ch.chat_baseline }})</span>
+          <div class="muted small">nota {{ ch.chat_score }}{% if not ch.chat_warm %} · aquecendo{% endif %} · última msg {{ ch.last_message }}</div>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+      <td data-label="Gravação">
+        {% if ch.state == "recording" %}
+          buffer {{ ch.buffered }}
+          <div class="muted small">último vídeo {{ ch.last_segment }}{% if ch.recorder_restarts %} · {{ ch.recorder_restarts }} reinício(s){% endif %}</div>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+      <td data-label="Hoje">{{ ch.clips_today }} corte(s)<div class="muted small">{{ ch.moments_today }} pico(s)</div></td>
+      <td data-label="">
+        {% if controls.paused_all %}
+          <span class="muted small">pausa geral</span>
+        {% else %}
+          {{ pause_button("/control/channel/" ~ ch.key, ch.paused_individually, "Pausar", "Retomar") }}
+        {% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7" class="muted">Nenhum canal em config/channels.yaml.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>

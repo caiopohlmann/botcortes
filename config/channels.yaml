@@ -1,0 +1,39 @@
+# Canais monitorados.
+#
+# login:        nome do canal na URL
+#                 twitch.tv/<login> | kick.com/<login> | youtube.com/@<login>
+#                 (no YouTube também vale o ID do canal, "UC...")
+# platform:     twitch (padrão), kick ou youtube
+# display_name: nome exibido nos créditos (opcional; padrão = login)
+# language:     "pt", "en" ou omitido para detecção automática pelo Whisper
+# facecam:      região da câmera no vídeo original, em FRAÇÕES do quadro (0 a 1).
+#               x/y = canto superior esquerdo; w/h = largura/altura.
+#               Omitido = layout sem facecam (gameplay centralizado + fundo desfocado).
+# hashtags:     hashtags extras só deste canal (somadas às de publish.hashtags)
+# folder:       pasta dos cortes em data/clips/pending/ (padrão: display_name, ou o login).
+#               Canais com o mesmo nome em plataformas diferentes caem na mesma pasta.
+# chat_id:      só Kick, opcional: id do chatroom, se o Kick bloquear a descoberta automática
+# quality:      qualidade só deste canal (padrão: recording.quality). "720p60,720p,best"
+#               usa ~metade da internet e quase não perde nitidez no vertical (ver README)
+# extra_chats:  streamer que transmite em várias plataformas ao mesmo tempo: grava só este
+#               canal e soma o chat das outras na detecção (um clipe só, sinal mais forte).
+#               NÃO liste o mesmo canal também como canal separado (daria clipe duplicado).
+
+channels:
+  - login: exemplo_streamer
+    platform: twitch
+    display_name: Exemplo Streamer
+    language: pt
+    # facecam: {x: 0.0, y: 0.70, w: 0.22, h: 0.30}
+    hashtags: ["#exemplostreamer"]
+    # extra_chats:
+    #   - {platform: kick, login: exemplo_streamer}
+    #   - {platform: youtube, login: ExemploStreamer}
+
+  # - login: outro_streamer
+  #   platform: kick
+  #   language: pt
+
+  # - login: CanalNoYoutube        # youtube.com/@CanalNoYoutube
+  #   platform: youtube
+  #   language: pt

@@ -1,0 +1,10 @@
+<header class="top">
+  <div>
+    <h1>cortesgta6</h1>
+    <p class="muted small" data-partial-clock>atualizado às {{ updated }}</p>
+  </div>
+  <nav class="tabs" aria-label="Telas">
+    <a href="/" {% if listing is not defined %}aria-current="page"{% endif %}>Painel</a>
+    <a href="/arquivos?p=pending" {% if listing is defined %}aria-current="page"{% endif %}>Pastas de cortes</a>
+  </nav>
+</header>

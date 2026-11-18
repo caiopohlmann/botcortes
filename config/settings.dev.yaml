@@ -1,0 +1,21 @@
+# Perfil dev (Mac/CPU, sem NVIDIA): ative com CORTES_PROFILE=dev no .env.
+# Só as chaves abaixo mudam em relação ao settings.yaml.
+
+logging:
+  level: DEBUG
+  signal_log_interval_s: 10
+
+transcription:
+  model: small
+  device: cpu
+  compute_type: int8
+
+render:
+  hwaccel: null
+  video_args: ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-profile:v", "high", "-g", "60"]
+
+worker:
+  concurrency: 1
+  gpu_concurrency: 1
+  encode_concurrency: 1
+  gpu_stats_interval_s: 0

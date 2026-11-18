@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pastas de cortes · cortesgta6</title>
+  <link rel="stylesheet" href="/static/panel.css">
+</head>
+<body{% if has_active %} data-refresh-page="10000"{% endif %}>
+  {% from "_macros.html" import requests_list with context %}
+  {% include "_header.html" %}
+  <main>
+    <section>
+      <h2>Pastas de cortes</h2>
+      <nav class="crumbs" aria-label="Caminho">
+        {% for name, rel in listing.crumbs %}
+          {% if loop.last %}<span aria-current="page">{{ name }}</span>
+          {% else %}<a href="/arquivos?p={{ q(rel) }}">{{ name }}</a><span class="sep">›</span>{% endif %}
+        {% endfor %}
+      </nav>
+
+      {% if listing.readme %}
+      <div class="readme tone-border-{{ grade_labels[listing.grade][1] if listing.grade else 'muted' }}">
+        <pre>{{ listing.readme }}</pre>
+      </div>
+      {% elif listing.rel == "" %}
+      <p class="muted small">Cada criador tem uma pasta; dentro dela, os cortes ficam separados pela qualidade da legenda.</p>
+      {% endif %}
+
+      {% if listing.folders %}
+      <div class="folders">
+        {% for folder in listing.folders %}
+        {% set tone = grade_labels[folder.grade][1] if folder.grade else "accent" %}
+        <a class="folder folder-{{ tone }}" href="/arquivos?p={{ q(folder.rel) }}">
+          <span class="folder-name">
+            <svg class="folder-icon" viewBox="0 0 20 16" aria-hidden="true"><path d="M1 3a2 2 0 0 1 2-2h4.6l2 2H17a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2z"/></svg>
+            {{ folder.name }}
+          </span>
+          <span class="muted small">{{ folder.clips }} corte(s){% if folder.grade %} · {{ grade_labels[folder.grade][0] }}{% endif %}</span>
+        </a>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if listing.files %}
+      <div class="files">
+        {% for file in listing.files %}
+        {% set clip = clip_rows.get(file.clip_id) %}
+        <article class="file">
+          <video src="/arquivos/raw?p={{ q(file.rel) }}" controls preload="metadata" playsinline></video>
+          <div class="file-body">
+            <div class="file-head">
+              {% if clip %}
+              <span class="score">nota {{ clip.score }}</span>
+              <span class="badge tone-{{ clip.grade_tone }}">{{ clip.grade_label }}</span>
+              <strong>{{ clip.channel }}</strong>
+              <span class="muted small">{{ clip.created }} · {{ clip.duration }} · {{ clip.ago }}</span>
+              {% else %}
+              <span class="muted small">sem registro no banco (arquivo copiado ou movido à mão)</span>
+              {% endif %}
+            </div>
+            <div class="file-name">{{ file.name }} · {{ fmt_num(file.size_mb, 0, " MB") }}</div>
+            {% if clip %}
+            <p class="small">“{{ clip.transcript or "sem fala" }}”</p>
+            <p class="muted small">confiança da legenda {{ clip.caption_score }}% · chat {{ clip.chat }} · áudio {{ clip.audio }}</p>
+            {% if clip.notes %}
+            <ul class="notes">{% for note in clip.notes %}<li class="tone-text-{{ clip.grade_tone }}">{{ note }}</li>{% endfor %}</ul>
+            {% endif %}
+            {% if clip.doubts %}<p class="small">Palavras duvidosas: {{ clip.doubts | join(", ") }}</p>{% endif %}
+            {% endif %}
+            <p class="small">
+              <a href="/arquivos/raw?p={{ q(file.rel) }}" download>baixar vídeo</a>
+              {% if file.description_rel %} · <a href="/arquivos/raw?p={{ q(file.description_rel) }}" target="_blank">descrição (.txt)</a>{% endif %}
+            </p>
+
+            {% if clip and assistant_enabled %}
+            <details class="ask-inline">
+              <summary class="small">Pedir ao Claude para ajustar este corte</summary>
+              <form class="ask" method="post" action="/assistente" data-json data-reset>
+                <input type="hidden" name="clip_id" value="{{ file.clip_id }}">
+                <label class="small" for="ask-{{ loop.index }}">O que fazer</label>
+                <textarea id="ask-{{ loop.index }}" name="message" rows="2" required maxlength="2000"
+                          placeholder="ex.: corrige a legenda: onde está &quot;mano&quot; é &quot;Bruno&quot;"></textarea>
+                <div class="ask-actions">
+                  <button type="submit" class="btn-primary">Enviar</button>
+                  <span class="small" data-result></span>
+                </div>
+              </form>
+            </details>
+            {{ requests_list(requests_by_clip.get(file.clip_id) or []) }}
+            {% endif %}
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+      {% elif not listing.folders %}
+      <p class="muted">Pasta vazia.</p>
+      {% endif %}
+    </section>
+  </main>
+  <script src="/static/panel.js"></script>
+</body>
+</html>

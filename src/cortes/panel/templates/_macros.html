@@ -1,0 +1,44 @@
+{% macro spark(chart, label, unit="", digits=0) -%}
+<div class="spark">
+  <div class="spark-head">
+    <span class="muted small">{{ label }} · 24 h</span>
+    <span class="small">{% if chart.peak is not none %}pico {{ fmt_num(chart.peak, digits, unit) }}{% endif %}</span>
+  </div>
+  {% if chart.empty %}
+  <p class="muted small spark-empty">coletando dados…</p>
+  {% else %}
+  <svg viewBox="0 0 {{ chart.width }} {{ chart.height }}" preserveAspectRatio="none" role="img" aria-label="{{ label }} nas últimas 24 horas">
+    <polyline points="{{ chart.points }}" fill="none" stroke="currentColor" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+  </svg>
+  {% endif %}
+</div>
+{%- endmacro %}
+
+{% macro pause_button(action_url, paused, pause_label, resume_label, confirm="") -%}
+<form method="post" action="{{ action_url }}/{{ 'resume' if paused else 'pause' }}" data-async {% if confirm and not paused %}data-confirm="{{ confirm }}"{% endif %}>
+  <button type="submit" class="{{ 'btn-resume' if paused else 'btn-pause' }}">{{ resume_label if paused else pause_label }}</button>
+</form>
+{%- endmacro %}
+
+{% macro requests_list(items) -%}
+<ul class="requests">
+  {% for item in items %}
+  <li>
+    <div class="request-head">
+      <span class="badge tone-{{ item.tone }}">{{ item.label }}</span>
+      <span class="muted small">{{ item.ago }}{% if item.took %} · levou {{ item.took }}{% endif %} · <code>{{ item.clip_id }}</code></span>
+    </div>
+    <p class="small request-msg">“{{ item.message }}”</p>
+    {% if item.reply %}<p class="small request-reply">{{ item.reply }}</p>{% endif %}
+    {% if item.error %}<p class="small tone-text-bad">{{ item.error }}</p>{% endif %}
+    {% if item.session_id %}
+    <form method="post" action="/assistente/{{ item.id }}/terminal" data-async class="inline">
+      <button type="submit" class="btn-small">Abrir conversa no terminal do PC</button>
+      <span class="muted small">ou rode <code>claude --resume {{ item.session_id }}</code></span>
+      <span class="small" data-result></span>
+    </form>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{%- endmacro %}

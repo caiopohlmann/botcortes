@@ -1,0 +1,61 @@
+{% from "_macros.html" import spark with context %}
+<h2>PC e processos</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Processo</th><th>Estado</th><th>Rodando há</th><th>Reinícios (1 h)</th><th>Avisos / erros (1 h)</th><th>RAM</th></tr></thead>
+  <tbody>
+  {% for p in processes %}
+    <tr>
+      <td data-label="Processo">{{ p.label }}</td>
+      <td data-label="Estado"><span class="badge tone-{{ p.tone }}">{{ p.status }}</span></td>
+      <td data-label="Rodando há">{{ p.uptime }}</td>
+      <td data-label="Reinícios (1 h)">{{ p.restarts_1h if p.restarts_1h is not none else "—" }}</td>
+      <td data-label="Avisos / erros (1 h)">{{ p.warnings_1h }} / <span class="{{ 'tone-text-bad' if p.errors_1h else '' }}">{{ p.errors_1h }}</span></td>
+      <td data-label="RAM">{{ fmt_num(p.rss_mb, 0, " MB") }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if not supervised %}
+<p class="muted small">Rodando sem o supervisor (<code>cortes run</code>): reinícios automáticos e contagem de reinícios desativados.</p>
+{% endif %}
+
+<div class="stats">
+  <div class="stat"><span class="stat-value">{{ fmt_num(host.cpu_pct, 0, "%") }}</span><span class="stat-label">CPU</span></div>
+  <div class="stat"><span class="stat-value">{{ fmt_num(host.ram_used_gb, 1) }}<small>/{{ fmt_num(host.ram_total_gb, 0, " GB") }}</small></span><span class="stat-label">RAM</span></div>
+  <div class="stat"><span class="stat-value {{ 'tone-text-bad' if host.disk_free_gb is defined and host.disk_free_gb is number and host.disk_free_gb < min_free_gb else '' }}">{{ fmt_num(host.disk_free_gb, 0, " GB") }}</span><span class="stat-label">disco livre</span></div>
+  <div class="stat"><span class="stat-value">{{ fmt_num(host.net_rx_mbps, 1) }}<small> Mbps</small></span><span class="stat-label">internet (download)</span></div>
+  <div class="stat"><span class="stat-value">{{ host.children if host.children is defined else "—" }}</span><span class="stat-label">streamlink/FFmpeg abertos</span></div>
+  {% if gpu %}
+  <div class="stat"><span class="stat-value">{{ fmt_num(gpu.util_pct, 0, "%") }}</span><span class="stat-label">GPU ({{ gpu.name }})</span></div>
+  <div class="stat"><span class="stat-value">{{ fmt_num(gpu.vram_used_mb / 1024 if gpu.vram_used_mb is number else none, 1) }}<small>/{{ fmt_num(gpu.vram_total_mb / 1024 if gpu.vram_total_mb is number else none, 0, " GB") }}</small></span><span class="stat-label">VRAM</span></div>
+  <div class="stat"><span class="stat-value">{{ fmt_num(gpu.temp_c, 0, " °C") }}</span><span class="stat-label">temperatura GPU</span></div>
+  {% endif %}
+</div>
+
+<div class="charts">
+  {{ spark(charts.cpu, "CPU", "%") }}
+  {{ spark(charts.ram, "RAM", "%") }}
+  {{ spark(charts.net, "Download", " Mbps", 1) }}
+  {{ spark(charts.gpu, "GPU", "%") }}
+  {{ spark(charts.temp, "Temperatura GPU", " °C") }}
+</div>
+
+{% if worker.active %}
+<h3>Processando agora</h3>
+<ul class="plain small">
+  {% for job in worker.active %}<li>{{ job.moment }} · tentativa {{ job.attempt }} · {{ fmt_ago(job.started_at, now) }}</li>{% endfor %}
+</ul>
+{% endif %}
+
+{% set logs = (monitor_log + worker_log) | sort(attribute="ts", reverse=True) %}
+{% if logs %}
+<h3>Últimos avisos e erros</h3>
+<ul class="plain small log">
+  {% for item in logs[:10] %}
+  <li><span class="tone-text-{{ 'bad' if item.level in ('error', 'critical') else 'warn' }}">{{ item.level }}</span>
+      {{ fmt_ago(item.ts, now) }} · <code>{{ item.event }}</code>{% if item.detail %} <span class="muted">{{ item.detail }}</span>{% endif %}</li>
+  {% endfor %}
+</ul>
+{% endif %}

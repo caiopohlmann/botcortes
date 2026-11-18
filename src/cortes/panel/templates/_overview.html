@@ -1,0 +1,32 @@
+{% from "_macros.html" import pause_button with context %}
+<div class="verdict tone-{{ verdict.tone }}">
+  <div>
+    <h2>{{ verdict.title }}</h2>
+    {% if verdict.reasons %}
+    <ul class="reasons">
+      {% for tone, text in verdict.reasons %}<li class="tone-text-{{ tone }}">{{ text }}</li>{% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">Monitor e worker rodando, sem erros na última hora, disco com folga.</p>
+    {% endif %}
+  </div>
+  <div class="controls">
+    {{ pause_button("/control/all", controls.paused_all, "Pausar tudo", "Retomar gravação",
+                    "Parar de gravar todos os canais?") }}
+    {{ pause_button("/control/worker", controls.worker_paused, "Pausar cortes", "Retomar cortes") }}
+  </div>
+</div>
+
+{% if controls.paused_all or controls.worker_paused %}
+<p class="banner">
+  {% if controls.paused_all %}Gravação pausada em todos os canais.{% endif %}
+  {% if controls.worker_paused %}Geração de cortes pausada: a fila espera ({{ counts.queue }} na fila).{% endif %}
+</p>
+{% endif %}
+
+<div class="stats">
+  <div class="stat"><span class="stat-value">{{ counts.today }}</span><span class="stat-label">cortes hoje</span></div>
+  <div class="stat"><span class="stat-value">{{ recording }}<small>/{{ channels | length }}</small></span><span class="stat-label">canais gravando</span></div>
+  <div class="stat"><span class="stat-value">{{ counts.queue + counts.running }}</span><span class="stat-label">na fila / processando</span></div>
+  <div class="stat"><span class="stat-value">{{ pc_uptime }}</span><span class="stat-label">PC ligado</span></div>
+</div>
