@@ -51,26 +51,33 @@ uv run cortes check
 ```
 cortes run (entrypoints/supervisor.py) — reinicia quem cair, publica reinícios
 ├── cortes monitor (entrypoints/monitor.py) — leve, 24/7
-│   LiveMonitor (application/live_monitor.py): a cada 2 s lê pausas; a cada 30 s consulta status
+│   LiveMonitor (application/live_monitor.py): a cada 2 s lê pausas e qualidade por canal;
+│   a cada 30 s consulta status; relê config/channels.yaml sozinho (channel_config.py)
 │   └── ChannelSession por canal ao vivo (application/channel_session.py)
 │       ├── StreamlinkFfmpegRecorder: streamlink → ffmpeg -c copy → .ts de 2 s (buffer ~3 min)
-│       ├── chats: Twitch IRC | Kick Pusher | YouTube get_live_chat (+ extra_chats)
+│       ├── chats: Twitch IRC | Kick Centrifugo | YouTube get_live_chat (+ extra_chats)
 │       ├── ChatAnalyzer + MomentDetector (domain/scoring.py, domain/detector.py)
 │       └── pico → espera o pós-roll → copia o trecho p/ data/work → moments + jobs (SQLite)
 ├── cortes worker (entrypoints/worker.py) — GPU
 │   ClipPipeline (application/clip_pipeline.py): áudio → nota → Whisper → render NVENC
 │   ├── classifica a legenda (domain/caption_quality.py): boa | revisar | ruim
-│   ├── data/clips/pending/<criador>/<qualidade>/<id>_notaNN.mp4 + .txt (+ relatório)
+│   ├── data/clips/<criador>/<N>.mp4 + <N>.txt (+ relatório), N em sequência por criador
 │   └── kit de edição em data/work/<id>/ (application/edit_kit.py) → `cortes rerender <id>`
 └── cortes panel (panel/app.py) — FastAPI em 127.0.0.1:8080
-    ├── lê o banco e as pastas (panel/files.py); escreve só pausas e pedidos ao Claude
-    └── fila "Pedir ao Claude" (application/assistant.py) → `claude -p` em segundo plano
+    ├── abas: Painel | PC e processos (/sistema) | Pastas de cortes (/arquivos)
+    ├── lê o banco e as pastas (panel/files.py); escreve só pausas, qualidade por canal, pedido de
+    │   reinício do sistema e pedidos ao Claude; "+ Adicionar canal" acrescenta no fim do
+    │   channels.yaml (channel_config.append_channel), depois de conferir o link na plataforma
+    │   (adapters/channel_check.py). ("Excluir corte" apaga só o .mp4 e o .txt do disco)
+    ├── "Verificar ao vivo agora" (panel/live_check.py): consulta as plataformas com os
+    │   provedores do monitor, resultado só na memória do painel; funciona com tudo pausado
+    └── fila "Pedir ao Claude", no próprio corte em Pastas (application/assistant.py) → `claude -p` em segundo plano
         (adapters/assistant/claude_code.py), que edita o kit e roda `cortes rerender`
 ```
 
 **Onde fica o estado:**
 - `data/cortes.db` (SQLite WAL) é a única ponte entre os processos. Tabelas: `moments`, `jobs`
-  (fila com lease), `clips` (com `caption_grade/score/notes`), `controls` (pausas do painel),
+  (fila com lease), `clips` (com `caption_grade/score/notes`), `controls` (pausas, `system_paused` e `restart:system` do painel),
   `heartbeats` (estado de cada processo, JSON, a cada 5 s), `metrics` (amostras de 1 min,
   7 dias) e `assistant_requests` (pedidos ao Claude).
 - **Schema:** ainda não existe banco em uso, então as tabelas mudaram direto no `CREATE
@@ -108,8 +115,18 @@ em logs, nomes de arquivo, no banco (`moments.channel`, `clips.channel`), nas pa
 - **Disco:** abaixo de `paths.min_free_gb`, para de capturar momentos novos; `data/work` é
   limpo após 24 h (kits de edição: 7 dias). Os clipes prontos nunca são apagados (curadoria
   do dono). A live inteira nunca é salva: só o buffer de ~3 min e os trechos dos picos.
-- **Qualidade da legenda pela confiança do Whisper** (sem gabarito): pastas boa/revisar/ruim,
-  com o motivo na pasta (`_LEIA-ME.txt`), no fim do `.txt` e no painel.
+- **Qualidade da legenda pela confiança do Whisper** (sem gabarito): boa/revisar/ruim, com o
+  motivo no fim do `.txt` e no painel (sem subpastas: pedido do dono).
+- **Cortes numerados por criador:** `data/clips/<criador>/1.mp4, 2.mp4...`. O dono apaga os já
+  publicados, então o número nunca se repete: o próximo é o maior entre os arquivos da pasta
+  e os `clips.video_path` do banco + 1 (`domain/models.next_clip_number`). Arquivos do dono
+  com número na frente ("4 so YT.mp4") também contam. O painel liga arquivo e corte pelo
+  caminho (`clips_by_paths`); o rerender mantém o mesmo arquivo.
+- **30 s ou 1 min, escolha do bot** (`domain/clip_length.py`): captura 61 s; corta 30 s se a
+  empolgação do chat (`moments.hype_s`, vem do `DetectedPeak`) for curta e o início/fim caírem
+  em silêncio na transcrição. Menos de 1 min = duração no nome (`5 (30s).mp4`): só YouTube
+  Shorts; o TikTok paga só a partir de 1 min. Colunas novas no banco entram por
+  `sqlite_store._ADDED_COLUMNS` (ALTER TABLE automático ao abrir).
 - **"Pedir ao Claude" sem terminal:** `claude -p` com o pedido pelo stdin (nunca em argv: no
   Windows o `claude.cmd` interpretaria texto livre), permissões limitadas (`--allowedTools`
   só com `uv run cortes rerender`, ffmpeg e ffprobe; sem web) e `session_id` salvo para
@@ -126,10 +143,15 @@ em logs, nomes de arquivo, no banco (`moments.channel`, `clips.channel`), nas pa
   `uv run ruff format --check .` e `uv run mypy` (strict).
 - Textos, logs explicativos e comentários em português; nomes de eventos de log em inglês
   `snake_case` (o README lista os principais).
-- Nada de publicação automática: os clipes só vão para `data/clips/pending/`.
+- Nada de publicação automática: os clipes só vão para `data/clips/<criador>/`.
 - Todo clipe mantém o crédito do canal (na tela e no `.txt`).
-- O painel só lê o banco, exceto `controls` (pausas) e `assistant_requests` (pedidos ao
-  Claude, que o próprio painel executa). Estado novo para o painel: inclua no batimento do
+- O painel só lê o banco, exceto `controls` (pausas; qualidade por canal = `quality:<canal>`; "Pausar tudo"/"Iniciar tudo" = `system_paused`, que o
+  supervisor obedece desligando e religando monitor e worker; e o pedido "Reiniciar sistema", que o
+  supervisor lê e obedece parando e subindo monitor, worker e painel; monitor e worker saem
+  sozinhos, e quem travar é encerrado à força: `entrypoints/restart.py`) e `assistant_requests` (pedidos ao
+  Claude, que o próprio painel executa). Fora do banco, o painel só escreve no fim do
+  `channels.yaml` ("+ Adicionar canal"); monitor, worker e painel releem a lista de canais
+  sozinhos (`channel_config.ChannelList`), o resto do config só ao reiniciar. Estado novo para o painel: inclua no batimento do
   processo (`entrypoints/status.py`) e mostre via `panel/views.py`. Não faça o painel chamar
   os outros processos.
 - Um corte é editado sempre pelo kit + `cortes rerender` (mantém banco, pasta e relatório
@@ -142,9 +164,8 @@ em logs, nomes de arquivo, no banco (`moments.channel`, `clips.channel`), nas pa
 
 ## Próximas etapas combinadas
 
-- **2c. Curadoria no painel:** aprovar/descartar corte, mover para
-  `data/clips/approved/<criador>/` (mesma estrutura por criador; a coluna `clips.status` já
-  existe: `pending_review`, `approved`, `discarded`). Ao aprovar/descartar, apagar o kit de
-  edição do corte.
+- **2c. Curadoria no painel:** o dono preferiu sem pastas pending/approved (tudo em
+  `data/clips/<criador>/`, ele apaga o que já publicou). Se voltar a ter aprovar/descartar,
+  usar a coluna `clips.status` (`pending_review`, `approved`, `discarded`), sem mover pasta.
 - **Calibração** dos limites de detecção com lives reais (`logging.signal_log_interval_s: 5`).
 - **4. VPS**, se o PC ficar pesado: ver "Quando passar para uma VPS" no README.

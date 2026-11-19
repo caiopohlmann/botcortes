@@ -35,6 +35,9 @@ class DetectedPeak:
     peak_ts: float
     score: float
     signal: ChatSignal
+    # Quanto a empolgação do chat durou (do disparo até acalmar, no máximo max_episode_s).
+    # Curta = lance rápido; o worker usa isso para escolher entre corte de 30 s e de 1 min.
+    hype_s: float = 0.0
 
 
 class MomentDetector:
@@ -42,6 +45,7 @@ class MomentDetector:
         self._p = params
         self._episode_start: float | None = None
         self._best: ChatSignal | None = None
+        self._last_ts = 0.0  # último sinal do episódio em andamento
         self._last_peak_ts = -math.inf
 
     @property
@@ -58,9 +62,11 @@ class MomentDetector:
                 and signal.z >= p.z_trigger
             ):
                 self._episode_start = signal.ts
+                self._last_ts = signal.ts
                 self._best = signal
             return None
 
+        self._last_ts = signal.ts
         if signal.score > self._best.score:
             self._best = signal
         if signal.score < p.release_score or signal.ts - self._episode_start >= p.max_episode_s:
@@ -74,16 +80,19 @@ class MomentDetector:
     def _close(self) -> DetectedPeak:
         best = self._best
         assert best is not None
+        start = self._episode_start if self._episode_start is not None else self._last_ts
+        hype_s = max(0.0, self._last_ts - start)
         self._best = None
         self._episode_start = None
         self._last_peak_ts = best.ts
-        return DetectedPeak(peak_ts=best.ts, score=best.score, signal=best)
+        return DetectedPeak(peak_ts=best.ts, score=best.score, signal=best, hype_s=hype_s)
 
 
 @dataclass(frozen=True, slots=True)
 class ClipParams:
-    pre_roll_s: float = 40.0
-    post_roll_s: float = 15.0
+    # Trecho capturado (61 s): dá para o corte de 1 min; o worker pode cortar 30 s dele.
+    pre_roll_s: float = 43.0
+    post_roll_s: float = 18.0
     # O chat reage alguns segundos depois do lance: o pico do chat fica "atrasado".
     reaction_offset_s: float = 4.0
 

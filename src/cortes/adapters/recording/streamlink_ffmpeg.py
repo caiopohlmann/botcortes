@@ -110,7 +110,7 @@ class StreamlinkFfmpegRecorder:
         ]  # fmt: skip
 
     async def _run_once(self, run_dir: Path) -> None:
-        run_dir.mkdir(parents=True, exist_ok=True)
+        run_dir.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 (instantâneo)
         streamlink = await asyncio.create_subprocess_exec(
             *self._streamlink_args(),
             stdout=asyncio.subprocess.PIPE,

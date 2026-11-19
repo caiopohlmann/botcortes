@@ -95,6 +95,7 @@ a { color: var(--accent); }
 }
 .verdict.tone-warn { border-left-color: var(--warn); }
 .verdict.tone-bad { border-left-color: var(--bad); }
+.verdict.tone-muted { border-left-color: var(--muted); }
 .verdict h2 { margin-bottom: 4px; }
 .reasons { margin: 4px 0 0; padding-left: 18px; }
 
@@ -179,7 +180,7 @@ tr:last-child td { border-bottom: 0; }
 .tone-bad { background: var(--bad-bg); color: var(--bad); }
 .tone-info { background: var(--info-bg); color: var(--info); }
 .tone-muted { background: var(--muted-bg); color: var(--muted); }
-.verdict.tone-ok, .verdict.tone-warn, .verdict.tone-bad { background: none; color: inherit; }
+.verdict.tone-ok, .verdict.tone-warn, .verdict.tone-bad, .verdict.tone-muted { background: none; color: inherit; }
 .tone-text-ok { color: var(--ok); }
 .tone-text-warn { color: var(--warn); }
 .tone-text-bad { color: var(--bad); }
@@ -265,9 +266,29 @@ a:focus-visible, button:focus-visible, select:focus-visible, textarea:focus-visi
 .ask textarea { resize: vertical; min-height: 56px; }
 .ask-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .ask-inline summary { cursor: pointer; color: var(--accent); }
+
+/* Título de seção com botão ao lado (Canais: "Verificar ao vivo agora"). */
+.section-head { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.section-head form.inline { margin-top: 0; }
+
+/* ---------------------------------------------------------------- Adicionar canal */
+.add-channel { margin-top: 12px; }
+.add-channel summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+.add-channel-form { display: grid; gap: 6px; max-width: 720px; margin-top: 8px; }
+.add-channel-form input, .add-channel-form select {
+  font: inherit; font-size: 14px; padding: 7px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); width: 100%;
+}
+.add-channel-row { display: grid; grid-template-columns: 2fr 1fr; gap: 10px; }
+.add-channel-row > div { display: grid; gap: 6px; }
+@media (max-width: 720px) { .add-channel-row { grid-template-columns: 1fr; } }
 .btn-primary { background: var(--accent); color: #fff; border-color: transparent; }
 .btn-primary:hover { border-color: transparent; opacity: 0.9; }
 .btn-small { padding: 4px 10px; font-size: 13px; }
+.tone-text-muted { color: var(--muted); }
+.btn-danger { color: var(--bad); }
+.btn-danger:hover { background: var(--bad-bg); border-color: var(--bad); }
+.delete-clip { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0; }
 
 .requests { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 8px; }
 .requests li { padding: 10px 12px; border-radius: 8px; background: var(--muted-bg); }
@@ -275,6 +296,54 @@ a:focus-visible, button:focus-visible, select:focus-visible, textarea:focus-visi
 .requests p { margin: 4px 0 0; }
 .request-reply { white-space: pre-wrap; }
 form.inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+
+/* ---------------------------------------------------------------- tabela de canais */
+table.channels td { padding: 12px 10px; }
+.ch-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ch-title .pill { margin-left: 0; }
+.nowrap { white-space: nowrap; }
+/* Estado e "Ao vivo": ponto colorido + texto (mais leve que um badge com fundo). */
+.status { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; white-space: nowrap; }
+.status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
+.st-ok { color: var(--ok); }
+.st-warn { color: var(--warn); }
+.st-bad { color: var(--bad); }
+.st-info { color: var(--info); }
+.st-muted { color: var(--muted); }
+/* Ações do canal: Pausar/Retomar em cima, seletor de qualidade embaixo. */
+.actions { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 112px; }
+.actions form { margin: 0; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button {
+  border: 0; border-radius: 0; padding: 3px 10px; font-size: 12px;
+  background: transparent; color: var(--muted);
+}
+.seg form + form button { border-left: 1px solid var(--border); }
+.seg button:hover { color: var(--text); }
+.seg .btn-active, .seg .btn-active:disabled {
+  background: var(--info-bg); color: var(--info); opacity: 1; cursor: default;
+}
+.btn-link { background: none; border: 0; padding: 2px 4px; color: var(--accent); cursor: pointer; }
+.btn-link:hover { text-decoration: underline; }
+
+/* ---------------------------------------------------------------- aba PC e processos */
+/* Tela de acompanhamento: letras e números maiores, para ler de longe. */
+.page-sistema { font-size: 17px; }
+.page-sistema h2 { font-size: 24px; }
+.page-sistema h3 { font-size: 19px; margin-top: 28px; }
+.page-sistema .small { font-size: 15px; }
+.page-sistema th { font-size: 15px; padding: 8px 12px; }
+.page-sistema td { padding: 12px; }
+.page-sistema .badge { font-size: 15px; padding: 3px 10px; }
+.page-sistema .stats { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+.page-sistema .stat { padding: 16px 18px; }
+.page-sistema .stat-value { font-size: 34px; }
+.page-sistema .stat-value small { font-size: 17px; }
+.page-sistema .stat-label { font-size: 15px; }
+.page-sistema .charts { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 18px; }
+.page-sistema .spark svg { height: 90px; stroke-width: 2px; }
+.page-sistema .log li { padding: 4px 0; }
+.page-sistema code { font-size: 15px; }
 
 /* ---------------------------------------------------------------- celular */
 @media (max-width: 720px) {

@@ -10,7 +10,7 @@ logging:
   level: INFO
   # >0 registra o sinal do chat a cada N segundos. Use 5-10 nas primeiras lives para
   # calibrar trigger_score/z_trigger olhando os números reais dos seus canais.
-  signal_log_interval_s: 0
+  signal_log_interval_s: 5      # calibração das primeiras lives (voltar a 0 depois)
 
 # ---------------------------------------------------------------- lives e plataformas
 monitor:
@@ -29,9 +29,11 @@ twitch:                         # status pela API oficial (TWITCH_CLIENT_ID/SECR
   chat_delay_s: 0
 
 kick:                           # status e chat "como navegador", sem conta
-  # WebSocket do chat (o mesmo da página). Se o chat do Kick parar com "Pusher recusou",
-  # abra kick.com com o DevTools (Network -> WS), copie a URL do ws-*.pusher.com e cole aqui.
-  pusher_url: "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0&flash=false"
+  # Chat pelo mesmo WebSocket (Centrifugo) da página, como visitante sem login. A URL do
+  # servidor vem da negociação em realtime_api; realtime_url é a reserva se ela falhar.
+  # Se o chat parar, abra kick.com com o DevTools (Network -> WS) e compare as URLs.
+  realtime_api: "https://web.kick.com/api/v1/realtime"
+  realtime_url: "wss://realtime.us-west-2.platform.kick.com/connection/websocket"
   streamlink_args: []
   chat_delay_s: 0
 
@@ -120,9 +122,20 @@ detector:
   cooldown_s: 90                # sem novos clipes do mesmo canal por N s após um pico
 
 clip:
-  pre_roll_s: 40                # segundos antes do lance
-  post_roll_s: 15               # segundos depois do lance
+  pre_roll_s: 43                # segundos antes do lance (trecho de 61 s: dá o corte de 1 min)
+  post_roll_s: 18               # segundos depois do lance
   reaction_offset_s: 4          # o pico do chat vem ~N s depois do lance
+
+# Corte de 30 s (o bot escolhe): empolgação curta no chat e dá para cortar 30 s em volta do
+# lance sem partir frase -> "N (30s).mp4" (só YouTube Shorts). Senão, o trecho todo (1 min).
+short_clip:
+  enabled: true
+  duration_s: 30
+  before_event_s: 22            # o lance fica a ~3/4 do corte curto
+  max_hype_s: 12                # empolgação do chat até isso = lance rápido
+  search_s: 4                   # quanto o início/fim podem andar para cair num silêncio
+  silence_s: 0.35
+  min_window_s: 45
 
 scoring:                        # nota final (0-100) = chat + áudio
   chat_weight: 0.7
@@ -243,10 +256,6 @@ publish:
     twitch: ["#twitch"]
     kick: ["#kick"]
     youtube: []
-  quality_folders:              # subpastas dentro da pasta de cada criador
-    boa: 1-legenda-boa
-    revisar: 2-legenda-revisar
-    ruim: 3-legenda-ruim
   title_max_chars: 90
   # Variáveis: {title} {display_name} {login} {platform} {channel_url} {hashtags}
   description_template: |

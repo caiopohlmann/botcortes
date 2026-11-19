@@ -20,20 +20,70 @@
 #               NÃO liste o mesmo canal também como canal separado (daria clipe duplicado).
 
 channels:
-  - login: exemplo_streamer
+  # Snopey: chat agressivo e muitos gritos na live, tende a gerar mais cortes que a média.
+  - login: snopey                  # twitch.tv/snopey
     platform: twitch
-    display_name: Exemplo Streamer
+    display_name: Snopey
     language: pt
-    # facecam: {x: 0.0, y: 0.70, w: 0.22, h: 0.30}
-    hashtags: ["#exemplostreamer"]
-    # extra_chats:
-    #   - {platform: kick, login: exemplo_streamer}
-    #   - {platform: youtube, login: ExemploStreamer}
 
-  # - login: outro_streamer
-  #   platform: kick
-  #   language: pt
+  - login: alanzoka               # twitch.tv/alanzoka
+    platform: twitch
+    display_name: Alanzoka
+    language: pt
 
-  # - login: CanalNoYoutube        # youtube.com/@CanalNoYoutube
-  #   platform: youtube
-  #   language: pt
+  # Bistecone transmite no Kick e no YouTube (antes: twitch.tv/bisteconee); gravado pelo Kick.
+  # Atenção aos parecidos: kick.com/bisteconee (com dois "e") é outro canal; o dele é
+  # kick.com/bistecone (verificado). No YouTube o oficial é @bisteconeee (três "e",
+  # UC7c0msgggkLeIW6lwJAy-Ow); @bistecone e @bisteconee são outros canais.
+  - login: bistecone               # kick.com/bistecone
+    platform: kick
+    display_name: Bistecone
+    folder: Bisteconee             # mantém a pasta dos cortes que vieram da Twitch
+    language: pt
+
+  - login: PaulinhoLOKOoficial     # youtube.com/@PaulinhoLOKOoficial
+    platform: youtube
+    display_name: Paulinho o LOKO
+    language: pt
+
+  # Os 5 abaixo foram conferidos na Twitch (Helix) e no Kick em 18/11/2026, véspera do GTA 6.
+  # Gabepeixe: kick.com/gabepeixe verificado e ao vivo no Kick; na Twitch não há lives salvas.
+  - login: gabepeixe               # kick.com/gabepeixe
+    platform: kick
+    display_name: Gabepeixe
+    language: pt
+
+  # Davy Jones: ao vivo no Kick (kick.com/davyjones, verificado); a última live na
+  # Twitch (twitch.tv/davyjones) foi em 04/10/2026.
+  - login: davyjones               # kick.com/davyjones
+    platform: kick
+    display_name: Davy Jones
+    language: pt
+
+  # Coringa: anunciou as lives de GTA 6 no Kick (kick.com/coringa, verificado). A Twitch
+  # dele (twitch.tv/coringa) tem mais seguidores, mas a última live lá foi em 25/09/2026.
+  - login: coringa                 # kick.com/coringa
+    platform: kick
+    display_name: Coringa
+    language: pt
+
+  # Baiano: transmite na Twitch (última live em 15/11/2026, League of Legends). O Kick
+  # dele (kick.com/baiano) quase não tem seguidores; twitch.tv/obaiano é outro canal.
+  - login: baiano                  # twitch.tv/baiano
+    platform: twitch
+    display_name: Baiano
+    language: pt
+
+  # LuquEt4: transmite na Twitch (última live em 09/11/2026, Counter-Strike).
+  - login: luquet4                 # twitch.tv/luquet4
+    platform: twitch
+    display_name: LuquEt4
+    language: pt
+
+  # Exemplo de multistream (grava uma plataforma e soma o chat das outras):
+  # - login: fulano
+  #   platform: twitch
+  #   extra_chats:
+  #     - {platform: kick, login: fulano}
+  #     - {platform: youtube, login: FulanoOficial}
+  # facecam (opcional): {x: 0.0, y: 0.70, w: 0.22, h: 0.30}

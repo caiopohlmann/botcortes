@@ -25,13 +25,14 @@ Collector = Callable[[], Awaitable[dict[str, Any]]]
 
 def controls_dict(controls: Controls) -> dict[str, Any]:
     return {
+        "system_paused": controls.system_paused,
         "paused_all": controls.paused_all,
         "worker_paused": controls.worker_paused,
         "paused_channels": sorted(controls.paused_channels),
     }
 
 
-def _stream_dict(stream: LiveStream | None) -> dict[str, Any] | None:
+def stream_dict(stream: LiveStream | None) -> dict[str, Any] | None:
     if stream is None:
         return None
     return {
@@ -74,7 +75,7 @@ def channel_status_dict(status: ChannelStatus) -> dict[str, Any]:
         "state": status.state.value,
         "checked_at": status.checked_at,
         "error": status.error,
-        "stream": _stream_dict(status.stream),
+        "stream": stream_dict(status.stream),
         "session": _session_dict(status.session),
     }
 

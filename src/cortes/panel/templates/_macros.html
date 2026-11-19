@@ -17,6 +17,7 @@
 {% macro pause_button(action_url, paused, pause_label, resume_label, confirm="") -%}
 <form method="post" action="{{ action_url }}/{{ 'resume' if paused else 'pause' }}" data-async {% if confirm and not paused %}data-confirm="{{ confirm }}"{% endif %}>
   <button type="submit" class="{{ 'btn-resume' if paused else 'btn-pause' }}">{{ resume_label if paused else pause_label }}</button>
+  <span class="small" data-result></span>
 </form>
 {%- endmacro %}
 

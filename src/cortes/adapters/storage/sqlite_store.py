@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS moments (
     status          TEXT NOT NULL,
     final_score     REAL,
     error           TEXT,
-    created_at      REAL NOT NULL
+    created_at      REAL NOT NULL,
+    hype_s          REAL
 );
 CREATE INDEX IF NOT EXISTS idx_moments_channel ON moments(channel, peak_ts);
 
@@ -117,6 +118,23 @@ CREATE INDEX IF NOT EXISTS idx_assistant_clip ON assistant_requests(clip_id, id)
 """
 
 
+# Colunas acrescentadas depois que o banco já estava em uso: (tabela, coluna, tipo).
+# O CREATE TABLE acima já tem todas; isto só completa um banco criado antes delas.
+_ADDED_COLUMNS = (("moments", "hype_s", "REAL"),)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, column, kind in _ADDED_COLUMNS:
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column in existing:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+        except sqlite3.OperationalError as exc:  # outro processo acrescentou no mesmo instante
+            if "duplicate column" not in str(exc):
+                raise
+
+
 class SqliteStore:
     def __init__(self, path: Path) -> None:
         self._path = path
@@ -124,6 +142,7 @@ class SqliteStore:
         with self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_SCHEMA)
+            _migrate(conn)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -143,13 +162,14 @@ class SqliteStore:
             conn.execute(
                 """INSERT INTO moments (id, channel, display_name, peak_ts, event_ts, start_ts,
                        end_ts, chat_score, source_path, source_start_ts, source_end_ts, status,
-                       final_score, error, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       final_score, error, created_at, hype_s)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     moment.id, moment.channel, moment.display_name, moment.peak_ts,
                     moment.event_ts, moment.start_ts, moment.end_ts, moment.chat_score,
                     str(moment.source_path), moment.source_start_ts, moment.source_end_ts,
                     moment.status.value, moment.final_score, moment.error, moment.created_at,
+                    moment.hype_s,
                 ),
             )  # fmt: skip
 
@@ -174,6 +194,7 @@ class SqliteStore:
             status=MomentStatus(row["status"]),
             final_score=row["final_score"],
             error=row["error"],
+            hype_s=row["hype_s"],
         )
 
     def set_moment_status(
@@ -212,6 +233,11 @@ class SqliteStore:
                     json.dumps(list(clip.doubtful_words), ensure_ascii=False),
                 ),
             )  # fmt: skip
+
+    def clip_video_paths(self) -> list[Path]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT video_path FROM clips").fetchall()
+        return [Path(row["video_path"]) for row in rows]
 
     def get_clip(self, clip_id: str) -> Clip | None:
         with self._connect() as conn:

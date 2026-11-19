@@ -32,7 +32,7 @@ def _parser() -> argparse.ArgumentParser:
     rr = sub.add_parser(
         "rerender", help="gera um corte de novo a partir do kit de edição (legenda corrigida)"
     )
-    rr.add_argument("clip_id", help="id do corte (nome do arquivo sem _notaNN.mp4)")
+    rr.add_argument("clip_id", help="id do corte (aparece no painel, em cada corte)")
 
     rf = sub.add_parser("render-file", help="gera um clipe de um vídeo local (teste sem Twitch)")
     rf.add_argument("video", type=Path)
@@ -45,6 +45,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     rf.add_argument("--event", type=float, default=None, help="lance, em s dentro do trecho")
     rf.add_argument("--chat-score", type=float, default=80.0)
+    rf.add_argument(
+        "--kit",
+        action="store_true",
+        help="copia o vídeo para data/work e guarda o kit de edição (permite `cortes rerender`)",
+    )
     return parser
 
 
@@ -71,7 +76,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             case "worker":
                 from cortes.entrypoints.worker import run_worker
 
-                asyncio.run(run_worker(settings))
+                channels_file = secrets.cortes_config_dir.resolve() / "channels.yaml"
+                asyncio.run(run_worker(settings, channels_file=channels_file))
             case "panel":
                 from cortes.panel.app import run_panel
 
@@ -101,6 +107,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         channel_login=args.channel,
                         event_s=args.event,
                         chat_score=args.chat_score,
+                        keep_kit=args.kit,
                     )
                 )
                 print(f"Clipe gerado: {output}" if output else "Nenhum clipe gerado.")
@@ -242,9 +249,7 @@ def run_check(settings: Settings, secrets: Secrets) -> int:
     return 1 if failed else 0
 
 
-def _check_platform(
-    settings: Settings, secrets: Secrets, platform: Platform
-) -> tuple[bool, str]:
+def _check_platform(settings: Settings, secrets: Secrets, platform: Platform) -> tuple[bool, str]:
     """Consulta o status real dos canais da plataforma (mesmo caminho do monitor)."""
     from cortes.entrypoints.monitor import build_status_providers
 

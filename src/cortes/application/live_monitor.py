@@ -2,8 +2,9 @@
 
 Ciclo (a cada `tick_s`, padrão 2 s):
   1. a cada `poll_interval_s`: consulta o status das plataformas;
-  2. lê as pausas do painel;
-  3. sincroniza: grava quem está ao vivo e não está pausado; para o resto.
+  2. lê as pausas e as qualidades escolhidas no painel;
+  3. sincroniza: grava quem está ao vivo e não está pausado; para o resto. Se a qualidade
+     de um canal gravando mudar no painel, reinicia só a gravação dele.
 
 Isolamento de falhas:
 - cada sessão é uma task própria; se cair, é recriada com espera crescente (30 s, 60 s...);
@@ -16,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Protocol
 
@@ -105,11 +106,62 @@ class LiveMonitor:
         self._misses: dict[str, int] = {}
         self._stop_reason: dict[str, str] = {}
         self._sessions: dict[str, tuple[asyncio.Task[None], SessionHandle]] = {}
+        self._session_channels: dict[str, Channel] = {}  # canal como a sessão foi iniciada
         self._crashes: dict[str, int] = {}
         self._retry_at: dict[str, float] = {}
         self._last_error: dict[str, str] = {}
         self._failures: dict[Platform, int] = {}
         self._skip: dict[Platform, int] = {}
+        self._pending_channels: tuple[Channel, ...] | None = None  # lista nova do config
+        self._poll_soon = False
+
+    # ------------------------------------------------------------------ lista de canais
+    def add_providers(self, providers: Mapping[Platform, StreamStatusProvider]) -> None:
+        """Provedor de uma plataforma que entrou no channels.yaml depois de iniciar."""
+        for platform, provider in providers.items():
+            self._providers.setdefault(platform, provider)
+
+    def set_channels(self, channels: Sequence[Channel]) -> None:
+        """channels.yaml mudou: aplica no próximo ciclo (sem parar os outros canais)."""
+        self._pending_channels = tuple(channels)
+
+    async def _apply_channels(self, channels: Sequence[Channel]) -> None:
+        new: dict[str, Channel] = {}
+        for channel in channels:
+            if channel.platform not in self._providers:
+                log.error(
+                    "channel_without_provider",
+                    channel=channel.key,
+                    hint="veja o erro do provedor desta plataforma no log (credenciais?)",
+                )
+                continue
+            new[channel.key] = channel
+        for key, old in list(self._channels.items()):
+            if key not in new:
+                log.info("channel_removed", channel=key)
+                if key in self._sessions:
+                    log.info("channel_stopping", channel=key, reason="removido do config")
+                    await self._stop(key)
+                for state in (
+                    self._online,
+                    self._seen,
+                    self._misses,
+                    self._stop_reason,
+                    self._crashes,
+                    self._retry_at,
+                    self._last_error,
+                ):
+                    state.pop(key, None)
+                self._filtered.discard(key)
+            elif new[key] != old and key in self._sessions:
+                # Ex.: extra_chats ou display_name mudou: grava de novo com a config nova.
+                log.info("channel_stopping", channel=key, reason="config mudou")
+                await self._stop(key)
+        added = [key for key in new if key not in self._channels]
+        if added:
+            log.info("channels_added", channels=added)
+            self._poll_soon = True  # consulta já, sem esperar os 30 s
+        self._channels = new
 
     # ------------------------------------------------------------------ ciclo
     async def run(self) -> None:
@@ -117,8 +169,9 @@ class LiveMonitor:
         try:
             while True:
                 now = self._mono()
-                poll = now >= next_poll
+                poll = now >= next_poll or self._poll_soon
                 if poll:
+                    self._poll_soon = False
                     next_poll = now + self._poll_s
                 await self.cycle(poll=poll)
                 await asyncio.sleep(self._tick_s)
@@ -126,6 +179,11 @@ class LiveMonitor:
             await self._stop_all()
 
     async def cycle(self, *, poll: bool = True) -> None:
+        if self._pending_channels is not None:
+            channels, self._pending_channels = self._pending_channels, None
+            await self._apply_channels(channels)
+            poll = poll or self._poll_soon
+            self._poll_soon = False
         if poll:
             self._apply(await self._poll())
         try:
@@ -225,12 +283,30 @@ class LiveMonitor:
                 reason = "pausado" if key in self._online else self._stop_reason.pop(key, None)
                 log.info("channel_stopping", channel=key, reason=reason or "offline")
                 await self._stop(key)
+            elif running:
+                current = self._session_channels[key].quality
+                quality = self._effective(channel).quality
+                if quality != current:
+                    # Escolhida no painel: grava de novo na qualidade nova. O trecho de um
+                    # pico em andamento é salvo como numa pausa; o buffer (~3 min) recomeça.
+                    log.info("channel_quality_changed", channel=key, old=current, new=quality)
+                    await self._stop(key)
+                    self._start(channel, self._online[key])
+
+    def _effective(self, channel: Channel) -> Channel:
+        """O canal com a qualidade escolhida no painel, se houver (senão, a do config)."""
+        quality = self._controls.quality_for(channel.key)
+        if quality is None or quality == channel.quality:
+            return channel
+        return replace(channel, quality=quality)
 
     def _start(self, channel: Channel, stream: LiveStream) -> None:
         log.info("channel_live", channel=channel.key, game=stream.game_name, title=stream.title)
-        handle = self._factory(channel, stream)
+        effective = self._effective(channel)
+        handle = self._factory(effective, stream)
         task = asyncio.create_task(handle.run(), name=f"session:{channel.key}")
         self._sessions[channel.key] = (task, handle)
+        self._session_channels[channel.key] = effective
         self._retry_at.pop(channel.key, None)
 
     def _reap(self) -> None:
@@ -239,6 +315,7 @@ class LiveMonitor:
             if not task.done():
                 continue
             del self._sessions[key]
+            self._session_channels.pop(key, None)
             if task.cancelled():
                 continue
             crashes = self._crashes.get(key, 0) + 1
@@ -257,6 +334,7 @@ class LiveMonitor:
 
     async def _stop(self, key: str) -> None:
         entry = self._sessions.pop(key, None)
+        self._session_channels.pop(key, None)
         self._misses.pop(key, None)
         if entry is None:
             return
@@ -267,6 +345,7 @@ class LiveMonitor:
     async def _stop_all(self) -> None:
         tasks = [task for task, _ in self._sessions.values()]
         self._sessions.clear()
+        self._session_channels.clear()
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -300,7 +379,8 @@ class LiveMonitor:
             stream = self._online.get(key) or (seen[1] if seen else None)
             statuses.append(
                 ChannelStatus(
-                    channel=channel,
+                    # Com a qualidade em uso (gravando) ou a que será usada na próxima live.
+                    channel=self._session_channels.get(key) or self._effective(channel),
                     state=state,
                     stream=stream,
                     session=session,

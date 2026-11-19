@@ -66,6 +66,8 @@ def test_filtergraph_without_loudnorm() -> None:
     graph = build_filtergraph(r, compute_layout(r, False), None)
     assert "loudnorm" not in graph
     assert "split=2[bg_in][gp_in]" in graph
+    # Sem isso o fundo sai verde com -hwaccel cuda (nv12 no boxblur).
+    assert "format=yuv420p,boxblur" in graph
 
 
 def test_filter_path_escapes_colon() -> None:

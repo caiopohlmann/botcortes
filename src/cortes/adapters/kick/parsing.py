@@ -1,4 +1,9 @@
-"""Parsing puro (sem I/O) das respostas do Kick: API do canal e eventos do chat (Pusher)."""
+"""Parsing puro (sem I/O) das respostas do Kick: API do canal e eventos do chat.
+
+O chat chega pelo Centrifugo (o mesmo WebSocket que a página usa desde 2026). Cada
+publicação traz o mesmo "envelope" de evento que o Pusher mandava antes:
+{"event": "App\\Events\\ChatMessageEvent", "data": "<JSON em string>"}.
+"""
 
 from __future__ import annotations
 
@@ -17,10 +22,25 @@ CHAT_EVENT = "App\\Events\\ChatMessageEvent"
 
 
 @dataclass(frozen=True, slots=True)
-class PusherFrame:
+class KickEvent:
     event: str
     channel: str | None
     data: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class CentrifugoFrame:
+    """Um comando do servidor Centrifugo (protocolo JSON, um objeto por linha).
+
+    kind: "ping" (responder "{}"), "reply" (resposta a um comando nosso, pelo `id`),
+    "pub" (publicação num canal: `event` = evento do Kick), "disconnect" ou "other".
+    """
+
+    kind: str
+    id: int | None = None
+    error: dict[str, Any] | None = None
+    body: dict[str, Any] | None = None  # resultado do connect/subscribe/refresh ou do push
+    event: KickEvent | None = None
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -32,12 +52,16 @@ def normalize_content(content: str) -> str:
     return " ".join(_EMOTE.sub(r" \1 ", content).split())
 
 
-def parse_frame(raw: str | bytes) -> PusherFrame | None:
-    """Pusher manda {"event", "channel", "data"}; "data" costuma vir como JSON em string."""
+def parse_frame(raw: str | bytes) -> KickEvent | None:
+    """Envelope {"event", "channel"?, "data"} em texto; "data" costuma vir como JSON em string."""
     try:
         frame = json.loads(raw)
     except ValueError:
         return None
+    return event_from_envelope(frame)
+
+
+def event_from_envelope(frame: Any, channel: str | None = None) -> KickEvent | None:
     if not isinstance(frame, dict) or not isinstance(frame.get("event"), str):
         return None
     data: Any = frame.get("data")
@@ -48,13 +72,74 @@ def parse_frame(raw: str | bytes) -> PusherFrame | None:
             data = {}
     if not isinstance(data, dict):
         data = {}
-    channel = frame.get("channel")
-    return PusherFrame(
-        event=frame["event"], channel=channel if isinstance(channel, str) else None, data=data
-    )
+    if channel is None and isinstance(frame.get("channel"), str):
+        channel = frame["channel"]
+    return KickEvent(event=frame["event"], channel=channel, data=data)
 
 
-def to_chat_message(frame: PusherFrame, channel: str, received_at: float) -> ChatMessage | None:
+def parse_centrifugo(raw: str | bytes) -> list[CentrifugoFrame]:
+    """Uma mensagem do WebSocket pode trazer vários comandos, um JSON por linha."""
+    text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+    frames: list[CentrifugoFrame] = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if not obj:
+            frames.append(CentrifugoFrame("ping"))
+            continue
+        if isinstance(obj.get("id"), int):
+            error = obj.get("error")
+            body = next((_dict(v) for k, v in obj.items() if k not in ("id", "error")), {})
+            frames.append(
+                CentrifugoFrame(
+                    "reply",
+                    id=obj["id"],
+                    error=error if isinstance(error, dict) else None,
+                    body=body,
+                )
+            )
+            continue
+        push = _dict(obj.get("push"))
+        if "pub" in push:
+            pub = _dict(push.get("pub"))
+            channel = push.get("channel")
+            event = event_from_envelope(
+                pub.get("data"), channel if isinstance(channel, str) else None
+            )
+            frames.append(CentrifugoFrame("pub", body=pub, event=event))
+        elif "disconnect" in push:
+            frames.append(CentrifugoFrame("disconnect", body=_dict(push.get("disconnect"))))
+        else:
+            frames.append(CentrifugoFrame("other", body=push or obj))
+    return frames
+
+
+def centrifugo_command(command_id: int, method: str, params: dict[str, Any]) -> str:
+    return json.dumps({"id": command_id, method: params}, separators=(",", ":"))
+
+
+def parse_realtime_url(body: Any) -> str | None:
+    """Resposta da negociação: a URL do Centrifugo (o Kick também pode oferecer o Pusher)."""
+    for item in _dict(_dict(body).get("data")).get("connections") or []:
+        item = _dict(item)
+        url = _dict(item.get("credentials")).get("url")
+        if item.get("provider") == "centrifugo" and isinstance(url, str) and url:
+            return url
+    return None
+
+
+def parse_realtime_token(body: Any) -> str | None:
+    token = _dict(_dict(body).get("data")).get("token")
+    return token if isinstance(token, str) and token else None
+
+
+def to_chat_message(frame: KickEvent, channel: str, received_at: float) -> ChatMessage | None:
     if frame.event != CHAT_EVENT:
         return None
     data = frame.data
@@ -70,12 +155,6 @@ def to_chat_message(frame: PusherFrame, channel: str, received_at: float) -> Cha
         author=author.casefold(),
         text=normalize_content(content),
         ts=received_at,  # entrega em tempo real: hora local de chegada, como na Twitch
-    )
-
-
-def subscribe_message(chatroom_id: str) -> str:
-    return json.dumps(
-        {"event": "pusher:subscribe", "data": {"auth": "", "channel": chat_channel(chatroom_id)}}
     )
 
 

@@ -4,6 +4,7 @@ coleta de uso do PC (CPU, RAM, disco, rede, GPU) para o painel."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
@@ -216,10 +217,8 @@ class HostSampler:
         self._last_net = (now, net.bytes_recv, net.bytes_sent)
 
         children: list[Any] = []
-        try:
+        with contextlib.suppress(ps.Error):
             children = self._proc.children(recursive=True)
-        except ps.Error:
-            pass
         child_rss = 0
         for child in children:
             try:

@@ -74,6 +74,10 @@ class MomentStore(Protocol):
 
     def get_clip(self, clip_id: str) -> Clip | None: ...
 
+    def clip_video_paths(self) -> list[Path]:
+        """Caminho do vídeo de todos os cortes já feitos (mesmo os apagados do disco)."""
+        ...
+
 
 class JobQueue(Protocol):
     def enqueue(self, moment_id: str) -> int: ...

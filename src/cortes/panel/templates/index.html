@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Painel cortesgta6</title>
-  <link rel="stylesheet" href="/static/panel.css">
+  <link rel="stylesheet" href="/static/panel.css?v=6">
 </head>
 <body data-refresh="{{ refresh_ms }}">
   {% include "_header.html" %}
@@ -12,9 +12,7 @@
     <section data-partial="overview">{% include "_overview.html" %}</section>
     <section data-partial="channels">{% include "_channels.html" %}</section>
     <section data-partial="clips">{% include "_clips.html" %}</section>
-    {% if assistant_enabled %}<section data-partial="assistant">{% include "_assistant.html" %}</section>{% endif %}
-    <section data-partial="system">{% include "_system.html" %}</section>
   </main>
-  <script src="/static/panel.js"></script>
+  <script src="/static/panel.js?v=3"></script>
 </body>
 </html>

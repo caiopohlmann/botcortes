@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from cortes.domain.models import Channel, ChatRef, Platform, channel_key
 
 
@@ -49,7 +51,7 @@ def test_chat_ref_normalizes_login() -> None:
 def test_folder_name_uses_display_name_and_is_windows_safe() -> None:
     assert Channel(login="fulano", display_name="Fulano GTA").folder_name == "Fulano GTA"
     assert Channel(login="fulano").folder_name == "fulano"
-    weird = Channel(login="x", display_name='Fu:la/no? <RP> *top*.')
+    weird = Channel(login="x", display_name="Fu:la/no? <RP> *top*.")
     assert weird.folder_name == "Fu_la_no_ _RP_ _top_"
     assert Channel(login="con").folder_name == "con_"  # nome reservado no Windows
     assert Channel(login="x", display_name="???").folder_name == "twitch-x"  # só símbolos
@@ -61,3 +63,38 @@ def test_folder_override_and_same_creator_on_two_platforms() -> None:
     assert twitch.folder_name == kick.folder_name == "Fulano"
     custom = Channel(login="fulano", folder="Fulano (cortes)")
     assert custom.folder_name == "Fulano (cortes)"
+
+
+def test_parse_channel_link() -> None:
+    from cortes.domain.models import parse_channel_link
+
+    assert parse_channel_link("https://www.twitch.tv/Alanzoka") == (Platform.TWITCH, "alanzoka")
+    assert parse_channel_link("twitch.tv/alanzoka/videos?filter=all") == (
+        Platform.TWITCH,
+        "alanzoka",
+    )
+    assert parse_channel_link("m.twitch.tv/alanzoka") == (Platform.TWITCH, "alanzoka")
+    assert parse_channel_link("https://kick.com/Gabe-Peixe") == (Platform.KICK, "gabe-peixe")
+    assert parse_channel_link(" kick.com/gabepeixe/ ") == (Platform.KICK, "gabepeixe")
+    assert parse_channel_link("https://www.youtube.com/@PaulinhoLOKOoficial/live") == (
+        Platform.YOUTUBE,
+        "paulinholokooficial",
+    )
+    channel_id = "UC7c0msgggkLeIW6lwJAy-Ow"
+    assert parse_channel_link(f"youtube.com/channel/{channel_id}") == (Platform.YOUTUBE, channel_id)
+
+    for bad in (
+        "",
+        "alanzoka",  # sem site: não dá para saber a plataforma
+        "https://instagram.com/fulano",
+        "twitch.tv",
+        "twitch.tv/directory/category/gta",
+        "kick.com/categories",
+        "youtube.com/watch?v=abc",
+        "youtube.com/c/fulano",
+        "youtu.be/abc",
+        "twitch.tv/a",  # curto demais
+        "kick.com/fu%20lano",
+    ):
+        with pytest.raises(ValueError):
+            parse_channel_link(bad)

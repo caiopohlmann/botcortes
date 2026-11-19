@@ -51,6 +51,31 @@
     out.className = `small tone-text-${tone}`;
   }
 
+  // "Reiniciar sistema": o painel também reinicia. Espera ele voltar (outro pid) e recarrega.
+  async function panelPid() {
+    try {
+      const resp = await fetch("/healthz", { cache: "no-store" });
+      return resp.ok ? (await resp.json()).pid : null;
+    } catch (err) {
+      return null; // painel fora do ar (reiniciando)
+    }
+  }
+
+  async function waitForRestart(form, oldPid) {
+    show(form, "Reiniciando… o painel volta em alguns segundos.", "muted");
+    const deadline = Date.now() + 90000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 1500));
+      const pid = await panelPid();
+      if (pid !== null && pid !== oldPid) {
+        window.location.reload();
+        return;
+      }
+    }
+    show(form, "O painel não voltou em 90 s. Veja o terminal do `cortes run`.", "bad");
+    busy = false;
+  }
+
   document.addEventListener("submit", async (event) => {
     const form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
@@ -60,6 +85,21 @@
     if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
     const button = form.querySelector("button[type=submit], button:not([type])");
     if (button) button.disabled = true;
+    // Excluir corte: solta o vídeo do player antes (no Windows, arquivo aberto não apaga).
+    const released = [];
+    if ("releaseVideo" in form.dataset) {
+      const box = form.closest("article") || form.parentElement;
+      for (const video of box.querySelectorAll("video")) {
+        released.push([video, video.getAttribute("src")]);
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+      }
+      show(form, "Excluindo…", "muted");
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    const restoreVideos = () => released.forEach(([video, src]) => { if (src) video.setAttribute("src", src); });
+    const oldPid = "restart" in form.dataset ? await panelPid() : null;
     try {
       const options = { method: "POST" };
       if (isJson) {
@@ -68,12 +108,35 @@
       }
       const resp = await fetch(form.action, options);
       if (!resp.ok && resp.status !== 303) {
+        restoreVideos();
         show(form, await errorText(resp), "bad");
         return;
       }
+      if ("reload" in form.dataset) {
+        window.location.reload();
+        return;
+      }
+      if ("restart" in form.dataset) {
+        busy = true; // não atualiza as seções enquanto o painel reinicia
+        await waitForRestart(form, oldPid);
+        return;
+      }
       if (isJson) {
-        show(form, "Enviado. O Claude vai trabalhar nisso; acompanhe abaixo.", "ok");
-        if ("reset" in form.dataset) form.querySelectorAll("textarea").forEach((t) => { t.value = ""; });
+        let message = "Enviado. O Claude vai trabalhar nisso; acompanhe abaixo.";
+        try {
+          const body = await resp.json();
+          if (body && body.message) message = String(body.message);
+        } catch (err) { /* resposta sem JSON */ }
+        show(form, message, "ok");
+        if ("reset" in form.dataset) {
+          form.querySelectorAll("textarea, input[type=text]").forEach((t) => { t.value = ""; });
+        }
+        // "Adicionar canal": mostra a mensagem, fecha o formulário e atualiza a tabela.
+        const box = "close" in form.dataset ? form.closest("details") : null;
+        if (box) {
+          await new Promise((r) => setTimeout(r, 2500));
+          box.open = false;
+        }
       } else {
         show(form, "Feito.", "ok");
       }
@@ -85,6 +148,7 @@
         setTimeout(() => window.location.reload(), 1200);
       }
     } catch (err) {
+      restoreVideos();
       show(form, "sem conexão com o painel", "bad");
     } finally {
       if (button) button.disabled = false;

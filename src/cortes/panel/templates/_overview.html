@@ -11,13 +11,39 @@
     {% endif %}
   </div>
   <div class="controls">
-    {{ pause_button("/control/all", controls.paused_all, "Pausar tudo", "Retomar gravação",
-                    "Parar de gravar todos os canais?") }}
-    {{ pause_button("/control/worker", controls.worker_paused, "Pausar cortes", "Retomar cortes") }}
+    {% if supervised or controls.anything_paused %}
+    {{ pause_button("/control/system", controls.anything_paused, "Pausar tudo", "Iniciar tudo",
+                    "Pausar tudo? Monitor e worker são desligados: param as gravações, os chats e os cortes, e a GPU fica livre. O buffer (~3 min) de cada live se perde; o corte em andamento volta para a fila. O painel continua aberto para você clicar em “Iniciar tudo”.") }}
+    {% endif %}
+    {% if supervised %}
+    <form method="post" action="/control/system/restart" data-async data-restart
+          data-confirm="Reiniciar o sistema (monitor, worker e painel)? As gravações param por alguns segundos e o buffer (~3 min) de cada live se perde; cortes em andamento voltam para a fila; um pedido ao Claude em andamento é interrompido. Tudo volta com o código e a configuração atuais. Quem travar é encerrado à força em até 30 s.">
+      <button type="submit" class="{{ 'btn-resume' if config_pending else 'btn-pause' }}">Reiniciar sistema</button>
+      <span class="small" data-result></span>
+    </form>
+    {% endif %}
   </div>
 </div>
 
-{% if controls.paused_all or controls.worker_paused %}
+{% if channels_error %}
+<p class="banner">
+  config/channels.yaml tem um erro e foi ignorado (o bot continua com a lista anterior de
+  canais): {{ channels_error }}
+</p>
+{% elif config_pending %}
+<p class="banner">
+  config/channels.yaml mudou e o monitor ainda não pegou a versão nova: os canais novos só
+  começam a ser gravados quando ele reiniciar{% if supervised %} (botão “Reiniciar sistema”){% else %}
+  (reinicie o <code>cortes monitor</code>){% endif %}.
+</p>
+{% endif %}
+
+{% if controls.system_paused %}
+<p class="banner">
+  Sistema pausado: monitor e worker desligados (sem gravação, sem chat, sem cortes, GPU livre).
+  A fila espera ({{ counts.queue }} na fila). Clique em “Iniciar tudo” para voltar.
+</p>
+{% elif controls.paused_all or controls.worker_paused %}
 <p class="banner">
   {% if controls.paused_all %}Gravação pausada em todos os canais.{% endif %}
   {% if controls.worker_paused %}Geração de cortes pausada: a fila espera ({{ counts.queue }} na fila).{% endif %}

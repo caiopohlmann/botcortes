@@ -88,7 +88,7 @@ Como fazer:
    edite transcript.json e/ou render.json (as instruções estão no campo "_ajuda" de cada
    arquivo; palavra corrigida = "probability": 1.0) e rode:
    uv run cortes rerender {ctx.clip_id}
-   O comando gera o vídeo de novo, reclassifica a legenda e move o corte de pasta se mudar.
+   O comando gera o vídeo de novo, reclassifica a legenda e mantém o mesmo arquivo (mesmo número).
 2. Título, descrição ou hashtags: edite o .txt, só a parte ACIMA da linha
    "qualidade da legenda" (a parte de baixo é gerada pelo rerender).
 3. Outras edições de vídeo (zoom, cortar, acelerar...): use ffmpeg gerando um arquivo NOVO

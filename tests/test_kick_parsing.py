@@ -4,12 +4,15 @@ import json
 
 from cortes.adapters.kick.parsing import (
     CHAT_EVENT,
+    centrifugo_command,
     chat_channel,
     normalize_content,
+    parse_centrifugo,
     parse_frame,
     parse_official_channels,
     parse_public_channel,
-    subscribe_message,
+    parse_realtime_token,
+    parse_realtime_url,
     to_chat_message,
 )
 
@@ -23,7 +26,7 @@ def chat_frame(content: str, *, slug: str = "Fulano", type_: str = "message") ->
         "created_at": "2025-01-01T12:00:00+00:00",
         "sender": {"id": 1, "username": slug, "slug": slug.lower()},
     }
-    # O Pusher manda "data" como JSON dentro de string.
+    # O envelope traz "data" como JSON dentro de string.
     frame = {"event": CHAT_EVENT, "channel": "chatrooms.668.v2", "data": json.dumps(data)}
     return json.dumps(frame)
 
@@ -56,10 +59,61 @@ def test_garbage_frames() -> None:
     assert frame is not None and frame.data == {}
 
 
-def test_subscribe_message() -> None:
-    body = json.loads(subscribe_message("668"))
-    assert body["event"] == "pusher:subscribe"
-    assert body["data"] == {"auth": "", "channel": "chatrooms.668.v2"}
+def centrifugo_pub(content: str, channel: str = "chatrooms.668.v2") -> str:
+    envelope = json.loads(chat_frame(content))
+    del envelope["channel"]  # no Centrifugo o canal vem fora do envelope
+    return json.dumps({"push": {"channel": channel, "pub": {"data": envelope, "offset": 7}}})
+
+
+def test_centrifugo_publication_becomes_chat_message() -> None:
+    (frame,) = parse_centrifugo(centrifugo_pub("[emote:1:LUL] kkkk"))
+    assert frame.kind == "pub" and frame.event is not None
+    assert frame.event.channel == chat_channel("668")
+    message = to_chat_message(frame.event, "kick-canal", 50.0)
+    assert message is not None and message.text == "LUL kkkk" and message.author == "fulano"
+
+
+def test_centrifugo_batch_ping_replies_and_disconnect() -> None:
+    raw = "\n".join(
+        [
+            "{}",
+            '{"id":1,"connect":{"client":"x","expires":true,"ttl":2699,"ping":25,"pong":true}}',
+            '{"id":2,"error":{"code":103,"message":"permission denied"}}',
+            centrifugo_pub("oi"),
+            '{"push":{"disconnect":{"code":3501,"reason":"bad request"}}}',
+            "lixo",
+            "",
+        ]
+    )
+    frames = parse_centrifugo(raw.encode())
+    assert [f.kind for f in frames] == ["ping", "reply", "reply", "pub", "disconnect"]
+    assert frames[1].id == 1 and frames[1].error is None
+    assert frames[1].body is not None and frames[1].body["ttl"] == 2699
+    assert frames[2].error == {"code": 103, "message": "permission denied"}
+    assert frames[4].body == {"code": 3501, "reason": "bad request"}
+
+
+def test_centrifugo_command() -> None:
+    body = json.loads(centrifugo_command(2, "subscribe", {"channel": "chatrooms.668.v2"}))
+    assert body == {"id": 2, "subscribe": {"channel": "chatrooms.668.v2"}}
+
+
+def test_realtime_negotiation_and_token() -> None:
+    negotiation = {
+        "data": {
+            "connections": [
+                {"credentials": {"app_key": "k", "cluster": "us2"}, "provider": "pusher"},
+                {"credentials": {"url": "wss://realtime.exemplo/ws"}, "provider": "centrifugo"},
+            ],
+            "mode": "websocket",
+        },
+        "message": "success",
+    }
+    assert parse_realtime_url(negotiation) == "wss://realtime.exemplo/ws"
+    assert parse_realtime_url({"data": {"connections": [{"provider": "pusher"}]}}) is None
+    assert parse_realtime_url("lixo") is None
+    assert parse_realtime_token({"data": {"token": "abc"}, "message": "success"}) == "abc"
+    assert parse_realtime_token({"data": {}}) is None
 
 
 PUBLIC_LIVE = {

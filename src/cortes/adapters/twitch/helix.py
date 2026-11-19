@@ -65,7 +65,7 @@ class HelixClient:
             token = await self._ensure_token()
             resp = await self._http.get(
                 f"{_API}{path}",
-                params=params,
+                params=tuple(params),
                 headers={"Client-Id": self._client_id, "Authorization": f"Bearer {token}"},
             )
             if resp.status_code == 401 and attempt == 0:
@@ -75,6 +75,12 @@ class HelixClient:
             data: dict[str, Any] = resp.json()
             return data
         raise TwitchAuthError("Token da Twitch inválido mesmo após renovação")
+
+    async def get_display_name(self, login: str) -> str | None:
+        """Nome do canal como a Twitch mostra (None = o canal não existe)."""
+        body = await self._get("/users", [("login", login)])
+        users = body.get("data") or []
+        return str(users[0].get("display_name") or login) if users else None
 
     async def get_live_streams(
         self, channels: Sequence[Channel]

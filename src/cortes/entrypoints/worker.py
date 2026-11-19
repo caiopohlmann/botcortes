@@ -7,6 +7,7 @@ import dataclasses
 import os
 import shutil
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -19,9 +20,18 @@ from cortes.adapters.storage.sqlite_store import SqliteStore
 from cortes.adapters.transcription.whisper import FasterWhisperTranscriber
 from cortes.application.channel_session import new_moment_id
 from cortes.application.clip_pipeline import ClipPipeline, PipelineConfig
+from cortes.application.edit_kit import SOURCE_FILE
+from cortes.channel_config import ChannelList
 from cortes.config import Settings, WorkerSettings
-from cortes.domain.models import Moment, MomentStatus, Transcript
+from cortes.domain.models import Channel, Moment, MomentStatus, Transcript
 from cortes.domain.ports import Transcriber
+from cortes.entrypoints.restart import (
+    SYSTEM,
+    PauseRequested,
+    RestartRequested,
+    watch_pause,
+    watch_restart,
+)
 from cortes.entrypoints.status import Collector, MetricsRecorder, heartbeat_loop
 from cortes.observability import error_counter, gpu_stats_loop, query_gpu
 
@@ -35,8 +45,24 @@ class _NoTranscriber:
         raise RuntimeError("transcrição desativada neste comando")
 
 
+def reloading_channel_lookup(settings: Settings, channels_file: Path) -> Callable[[str], Channel]:
+    """settings.channel(), mas com a lista do channels.yaml atual (canal novo sem reiniciar)."""
+    channel_list = ChannelList(settings.channels, channels_file, name="worker_channels")
+
+    def lookup(ref: str) -> Channel:
+        current = list(channel_list.current())
+        return settings.model_copy(update={"channels": current}).channel(ref)
+
+    return lookup
+
+
 async def build_pipeline(
-    settings: Settings, store: SqliteStore, *, force: bool = False, whisper: bool = True
+    settings: Settings,
+    store: SqliteStore,
+    *,
+    force: bool = False,
+    whisper: bool = True,
+    channels_file: Path | None = None,
 ) -> ClipPipeline:
     media = FfmpegMedia(
         settings.recording.ffmpeg_path,
@@ -60,11 +86,13 @@ async def build_pipeline(
         store=store,
         media=media,
         transcriber=transcriber,
-        channel_lookup=settings.channel,
+        channel_lookup=reloading_channel_lookup(settings, channels_file)
+        if channels_file
+        else settings.channel,
         config=PipelineConfig(
             weights=weights,
             captions=settings.captions,
-            output_dir=paths.clips_pending,
+            output_dir=paths.clips,
             work_root=paths.work,
             hashtags=tuple(settings.publish.hashtags),
             description_template=settings.publish.description_template,
@@ -72,7 +100,7 @@ async def build_pipeline(
             keep_work_files=settings.worker.keep_work_files,
             keep_edit_kit=settings.worker.edit_kit_days > 0,
             quality=settings.caption_quality,
-            quality_folders=dict(settings.publish.quality_folders),
+            short_clip=settings.short_clip,
             platform_hashtags={
                 platform: tuple(tags)
                 for platform, tags in settings.publish.platform_hashtags.items()
@@ -168,8 +196,10 @@ def clean_work_dirs(
         moment = store.get_moment(directory.name)
         if moment is not None and moment.status is MomentStatus.QUEUED:
             continue
-        limit = edit_kit_s if moment is not None and moment.status is MomentStatus.RENDERED else (
-            retention_s
+        limit = (
+            edit_kit_s
+            if moment is not None and moment.status is MomentStatus.RENDERED
+            else (retention_s)
         )
         if limit <= 0 or age <= limit:
             continue
@@ -208,13 +238,13 @@ async def _janitor_loop(
         await asyncio.sleep(3600)
 
 
-async def run_worker(settings: Settings) -> None:
+async def run_worker(settings: Settings, *, channels_file: Path | None = None) -> None:
     paths = settings.paths
-    for directory in (paths.work, paths.clips_pending, paths.clips_approved):
+    for directory in (paths.work, paths.clips):
         directory.mkdir(parents=True, exist_ok=True)
     store = SqliteStatusStore(paths.database)
     started_at = time.time()
-    pipeline = await build_pipeline(settings, store)
+    pipeline = await build_pipeline(settings, store, channels_file=channels_file)
     ws = settings.worker
     state = WorkerState()
     log.info(
@@ -225,24 +255,35 @@ async def run_worker(settings: Settings) -> None:
         profile=settings.profile,
     )
     collect = _worker_collector(settings, store, state)
-    async with asyncio.TaskGroup() as tg:
-        for slot in range(ws.concurrency):
-            tg.create_task(_job_loop(slot, store, pipeline, ws, state))
-        tg.create_task(gpu_stats_loop(ws.gpu_stats_interval_s))
-        tg.create_task(
-            heartbeat_loop(
-                store,
-                "worker",
-                collect,
-                interval_s=settings.panel.heartbeat_s,
-                started_at=started_at,
+    try:
+        async with asyncio.TaskGroup() as tg:
+            for slot in range(ws.concurrency):
+                tg.create_task(_job_loop(slot, store, pipeline, ws, state))
+            tg.create_task(gpu_stats_loop(ws.gpu_stats_interval_s))
+            tg.create_task(
+                heartbeat_loop(
+                    store,
+                    "worker",
+                    collect,
+                    interval_s=settings.panel.heartbeat_s,
+                    started_at=started_at,
+                )
             )
-        )
-        tg.create_task(
-            _janitor_loop(
-                store, paths.work, ws.work_retention_h, ws.edit_kit_days, paths.min_free_bytes
+            tg.create_task(
+                _janitor_loop(
+                    store, paths.work, ws.work_retention_h, ws.edit_kit_days, paths.min_free_bytes
+                )
             )
-        )
+            tg.create_task(watch_restart(lambda: store.restart_requested_at(SYSTEM), started_at))
+            tg.create_task(watch_pause(lambda: store.get_controls().system_paused))
+    except* PauseRequested:
+        # "Pausar tudo" no painel: o job em andamento voltou para a fila (_job_loop) e a GPU
+        # fica livre. O supervisor só sobe o worker de novo no "Iniciar tudo".
+        log.info("worker_paused")
+    except* RestartRequested:
+        # "Reiniciar sistema" no painel. O TaskGroup cancelou os jobs em andamento, e cada um
+        # voltou para a fila (_job_loop). Saída normal (código 0): o supervisor sobe o worker.
+        log.info("worker_restarting")
 
 
 def _worker_collector(
@@ -294,9 +335,10 @@ async def render_file(
     channel_login: str,
     event_s: float | None,
     chat_score: float,
+    keep_kit: bool = False,
 ) -> Path | None:
     """Gera um clipe a partir de um arquivo local (testa o pipeline sem Twitch)."""
-    video = video.resolve()
+    video = video.resolve()  # noqa: ASYNC240 (comando de teste, uma vez)
     if not video.is_file():
         raise FileNotFoundError(video)
     paths = settings.paths
@@ -304,10 +346,18 @@ async def render_file(
     pipeline = await build_pipeline(settings, store, force=True)
     channel = settings.channel(channel_login)
     now = time.time()
+    moment_id = new_moment_id(channel.key, now)
+    if keep_kit:
+        # Copia o vídeo para a pasta do corte: com a fonte em data/work/<id>/ o pipeline
+        # guarda o kit de edição (transcript.json + render.json), e o corte pode ser
+        # corrigido depois com `cortes rerender` ou pelo "Pedir ao Claude" do painel.
+        kit_dir = paths.work / moment_id
+        await asyncio.to_thread(kit_dir.mkdir, parents=True, exist_ok=True)
+        video = await asyncio.to_thread(shutil.copyfile, video, kit_dir / SOURCE_FILE)
     # O arquivo é tratado como uma "fonte" cujo relógio começa em 0.
     event_at = start_s + (event_s if event_s is not None else max(0.0, duration_s - 15.0))
     moment = Moment(
-        id=new_moment_id(channel.key, now),
+        id=moment_id,
         channel=channel.key,
         display_name=channel.name,
         peak_ts=now,
@@ -331,4 +381,3 @@ async def rerender_clip(settings: Settings, clip_id: str) -> Path:
     pipeline = await build_pipeline(settings, store, whisper=False)
     clip = await pipeline.rerender(clip_id)
     return clip.video_path
-

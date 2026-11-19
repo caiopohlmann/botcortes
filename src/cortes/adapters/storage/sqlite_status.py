@@ -14,11 +14,14 @@ from pathlib import Path
 from typing import Any
 
 from cortes.adapters.storage.sqlite_store import SqliteStore, json_list
-from cortes.domain.models import Controls, JobStatus
+from cortes.domain.models import QUALITY_PRESETS, Controls, JobStatus
 
+_SYSTEM_PAUSED = "system_paused"
 _PAUSED_ALL = "paused_all"
 _WORKER_PAUSED = "worker_paused"
 _CHANNEL_PREFIX = "channel:"
+_QUALITY_PREFIX = "quality:"  # valor = nome em QUALITY_PRESETS (qualidade escolhida no painel)
+_RESTART_PREFIX = "restart:"  # valor = horário (epoch) do pedido de reinício
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +78,7 @@ class SqliteStatusStore(SqliteStore):
             rows = conn.execute("SELECT key, value FROM controls").fetchall()
         values = {row["key"]: row["value"] for row in rows}
         return Controls(
+            system_paused=values.get(_SYSTEM_PAUSED) == "1",
             paused_all=values.get(_PAUSED_ALL) == "1",
             worker_paused=values.get(_WORKER_PAUSED) == "1",
             paused_channels=frozenset(
@@ -82,6 +86,11 @@ class SqliteStatusStore(SqliteStore):
                 for key, value in values.items()
                 if key.startswith(_CHANNEL_PREFIX) and value == "1"
             ),
+            channel_quality={
+                key[len(_QUALITY_PREFIX) :]: value
+                for key, value in values.items()
+                if key.startswith(_QUALITY_PREFIX) and value in QUALITY_PRESETS
+            },
         )
 
     def _set_flag(self, key: str, on: bool) -> None:
@@ -96,6 +105,17 @@ class SqliteStatusStore(SqliteStore):
             else:
                 conn.execute("DELETE FROM controls WHERE key = ?", (key,))
 
+    def set_system_paused(self, paused: bool) -> None:
+        self._set_flag(_SYSTEM_PAUSED, paused)
+
+    def resume_all(self) -> None:
+        """Botão "Iniciar tudo": tira a pausa do sistema e as gerais (as de canal ficam)."""
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM controls WHERE key IN (?, ?, ?)",
+                (_SYSTEM_PAUSED, _PAUSED_ALL, _WORKER_PAUSED),
+            )
+
     def set_paused_all(self, paused: bool) -> None:
         self._set_flag(_PAUSED_ALL, paused)
 
@@ -104,6 +124,49 @@ class SqliteStatusStore(SqliteStore):
 
     def set_channel_paused(self, channel_key: str, paused: bool) -> None:
         self._set_flag(f"{_CHANNEL_PREFIX}{channel_key}", paused)
+
+    def set_channel_quality(self, channel_key: str, preset: str | None) -> None:
+        """Qualidade escolhida no painel (nome em QUALITY_PRESETS); None volta à do config."""
+        key = f"{_QUALITY_PREFIX}{channel_key}"
+        with self._connect() as conn:
+            if preset is None:
+                conn.execute("DELETE FROM controls WHERE key = ?", (key,))
+                return
+            if preset not in QUALITY_PRESETS:
+                raise ValueError(f"qualidade desconhecida: {preset}")
+            conn.execute(
+                """INSERT INTO controls (key, value, updated_at) VALUES (?, ?, ?)
+                   ON CONFLICT(key) DO UPDATE
+                   SET value = excluded.value, updated_at = excluded.updated_at""",
+                (key, preset, time.time()),
+            )
+
+    # ------------------------------------------------------------------ reinício pelo painel
+    def request_restart(self, process: str, at: float | None = None) -> None:
+        """Pede ao processo que saia sozinho (o supervisor o sobe de novo).
+
+        Guarda o horário do pedido: o processo só obedece a pedidos mais novos que o próprio
+        início, então o registro pode ficar no banco sem causar reinícios em sequência.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO controls (key, value, updated_at) VALUES (?, ?, ?)
+                   ON CONFLICT(key) DO UPDATE
+                   SET value = excluded.value, updated_at = excluded.updated_at""",
+                (f"{_RESTART_PREFIX}{process}", repr(at or time.time()), time.time()),
+            )
+
+    def restart_requested_at(self, process: str) -> float | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM controls WHERE key = ?", (f"{_RESTART_PREFIX}{process}",)
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            return float(row["value"])
+        except (TypeError, ValueError):
+            return None
 
     # ------------------------------------------------------------------ batimentos
     def write_heartbeat(
@@ -201,8 +264,7 @@ class SqliteStatusStore(SqliteStore):
     def moments_by_channel(self, since_ts: float) -> dict[str, int]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT channel, COUNT(*) AS n FROM moments WHERE created_at >= ? "
-                "GROUP BY channel",
+                "SELECT channel, COUNT(*) AS n FROM moments WHERE created_at >= ? GROUP BY channel",
                 (since_ts,),
             ).fetchall()
         return {row["channel"]: int(row["n"]) for row in rows}
@@ -231,14 +293,23 @@ class SqliteStatusStore(SqliteStore):
             ).fetchall()
         return {row["caption_grade"]: int(row["n"]) for row in rows}
 
+    def clips_by_paths(self, paths: list[str]) -> dict[str, ClipRow]:
+        """Cortes pelo caminho do vídeo (como gravado no banco) -> ClipRow."""
+        if not paths:
+            return {}
+        marks = ",".join("?" * len(paths))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM clips WHERE video_path IN ({marks})", paths
+            ).fetchall()
+        return {row["video_path"]: _clip_row(row) for row in rows}
+
     def clips_by_ids(self, clip_ids: list[str]) -> dict[str, ClipRow]:
         if not clip_ids:
             return {}
         marks = ",".join("?" * len(clip_ids))
         with self._connect() as conn:
-            rows = conn.execute(
-                f"SELECT * FROM clips WHERE id IN ({marks})", clip_ids
-            ).fetchall()
+            rows = conn.execute(f"SELECT * FROM clips WHERE id IN ({marks})", clip_ids).fetchall()
         return {row["id"]: _clip_row(row) for row in rows}
 
     # ------------------------------------------------------------------ pedidos ao Claude

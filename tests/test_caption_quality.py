@@ -77,9 +77,9 @@ def test_no_speech_goes_to_review() -> None:
 
 def test_report_and_split() -> None:
     quality = assess_captions(transcript([0.95] * 17 + [0.3, 0.4, 0.2]), P)
-    report = quality_report(quality, "2-legenda-revisar")
+    report = quality_report(quality)
     assert report.startswith(REPORT_SEPARATOR)
-    assert "Legenda: REVISAR (pasta 2-legenda-revisar)" in report
+    assert "Legenda: REVISAR\n" in report and "pasta" not in report
     assert 'Palavras duvidosas: "p19" (20%)' in report
     text = "Título\n\n#gta6\n\n" + report
     assert split_description(text) == "Título\n\n#gta6\n"

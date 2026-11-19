@@ -213,6 +213,7 @@ class ChannelSession:
                 source_start_ts=snapshot.wall_start,
                 source_end_ts=snapshot.wall_end,
                 created_at=self._clock(),
+                hype_s=peak.hype_s,
             )
             await asyncio.to_thread(self._store.add_moment, moment)
             job_id = await asyncio.to_thread(self._queue.enqueue, moment_id)

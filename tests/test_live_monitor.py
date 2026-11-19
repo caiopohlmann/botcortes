@@ -7,6 +7,7 @@ import pytest
 
 from cortes.application.live_monitor import ChannelState, LiveMonitor
 from cortes.domain.models import (
+    QUALITY_PRESETS,
     Channel,
     Controls,
     LiveStream,
@@ -73,9 +74,11 @@ class Sessions:
     def __init__(self, crash: bool = False) -> None:
         self.started: list[str] = []
         self.stopped: list[str] = []
+        self.qualities: list[str | None] = []  # qualidade com que cada sessão foi criada
         self.crash = crash
 
     def factory(self, channel: Channel, stream: LiveStream) -> FakeSession:
+        self.qualities.append(channel.quality)
         return FakeSession(self, channel.key, self.crash)
 
 
@@ -160,9 +163,7 @@ def test_game_filter_ignores_platforms_without_game() -> None:
 def test_other_game_is_filtered() -> None:
     status = ScriptedStatus([{TW.key: live(TW, game="Minecraft")}])
     sessions = Sessions()
-    monitor = LiveMonitor(
-        [TW], {Platform.TWITCH: status}, sessions.factory, game_filter=["GTA VI"]
-    )
+    monitor = LiveMonitor([TW], {Platform.TWITCH: status}, sessions.factory, game_filter=["GTA VI"])
     run_cycles(monitor, 1, stop=False)
     assert sessions.started == []
     assert monitor.snapshot()[0].state is ChannelState.FILTERED
@@ -207,6 +208,129 @@ def test_pause_and_resume_channel() -> None:
         controls["value"] = Controls(paused_all=True)
         await monitor.cycle(poll=False)
         assert all(s.state is ChannelState.PAUSED for s in monitor.snapshot())
+        await monitor._stop_all()
+
+    asyncio.run(main())
+
+
+def test_quality_chosen_in_panel_restarts_only_that_channel() -> None:
+    status = ScriptedStatus([{TW.key: live(TW), KI.key: live(KI)}])
+    kick = ScriptedStatus([{KI.key: live(KI)}])
+    sessions = Sessions()
+    controls = {"value": Controls()}
+
+    async def read_controls() -> Controls:
+        return controls["value"]
+
+    monitor = LiveMonitor(
+        [TW, KI],
+        {Platform.TWITCH: status, Platform.KICK: kick},
+        sessions.factory,
+        controls=read_controls,
+    )
+
+    async def main() -> None:
+        await monitor.cycle(poll=True)
+        await asyncio.sleep(0)
+        assert sessions.qualities == [None, None]  # sem escolha: a do config
+
+        # 720p no painel só para a Twitch: reinicia a gravação dela, a do Kick segue.
+        controls["value"] = Controls(channel_quality={TW.key: "720p"})
+        await monitor.cycle(poll=False)
+        await asyncio.sleep(0)
+        assert sessions.stopped == [TW.key]
+        assert sessions.started.count(TW.key) == 2 and sessions.started.count(KI.key) == 1
+        assert sessions.qualities[-1] == QUALITY_PRESETS["720p"]
+        states = {s.channel.key: s for s in monitor.snapshot()}
+        assert states[TW.key].channel.quality == QUALITY_PRESETS["720p"]
+        assert states[TW.key].state is ChannelState.RECORDING
+
+        # Mesma escolha nos ciclos seguintes: não reinicia de novo.
+        await monitor.cycle(poll=True)
+        await monitor.cycle(poll=False)
+        assert sessions.started.count(TW.key) == 2
+
+        # "usar o config": volta à qualidade do channels.yaml (reinicia uma vez).
+        controls["value"] = Controls()
+        await monitor.cycle(poll=False)
+        await asyncio.sleep(0)
+        assert sessions.started.count(TW.key) == 3 and sessions.qualities[-1] is None
+        await monitor._stop_all()
+
+    asyncio.run(main())
+
+
+def test_quality_chosen_while_paused_applies_on_next_start() -> None:
+    status = ScriptedStatus([{TW.key: live(TW)}])
+    sessions = Sessions()
+    controls = {"value": Controls(paused_channels=frozenset({TW.key}))}
+
+    async def read_controls() -> Controls:
+        return controls["value"]
+
+    monitor = LiveMonitor([TW], {Platform.TWITCH: status}, sessions.factory, controls=read_controls)
+
+    async def main() -> None:
+        await monitor.cycle(poll=True)
+        assert sessions.started == []
+        controls["value"] = Controls(
+            paused_channels=frozenset({TW.key}), channel_quality={TW.key: "720p"}
+        )
+        await monitor.cycle(poll=False)
+        assert sessions.started == []  # pausado: só guarda a escolha
+        assert monitor.snapshot()[0].channel.quality == QUALITY_PRESETS["720p"]
+
+        controls["value"] = Controls(channel_quality={TW.key: "720p"})  # Retomar
+        await monitor.cycle(poll=False)
+        await asyncio.sleep(0)
+        assert sessions.qualities == [QUALITY_PRESETS["720p"]]
+        await monitor._stop_all()
+
+    asyncio.run(main())
+
+
+def test_channels_yaml_change_adds_and_removes_without_touching_others() -> None:
+    new = Channel(login="novo")
+    status = ScriptedStatus([{TW.key: live(TW), new.key: live(new)}])
+    kick = ScriptedStatus([{KI.key: live(KI)}])
+    sessions = Sessions()
+    monitor = LiveMonitor([TW], {Platform.TWITCH: status}, sessions.factory)
+
+    async def main() -> None:
+        await monitor.cycle(poll=True)
+        await asyncio.sleep(0)
+        assert sessions.started == [TW.key]
+        polls = status.calls
+
+        # Canal novo na Twitch: entra já no próximo ciclo (consulta sem esperar os 30 s).
+        monitor.set_channels([TW, new])
+        await monitor.cycle(poll=False)
+        await asyncio.sleep(0)
+        assert status.calls == polls + 1
+        assert sessions.started == [TW.key, new.key] and sessions.stopped == []
+
+        # Plataforma nova sem provedor: fica de fora (com erro no log) até ter o provedor.
+        monitor.set_channels([TW, new, KI])
+        await monitor.cycle(poll=False)
+        assert KI.key not in {s.channel.key for s in monitor.snapshot()}
+        monitor.add_providers({Platform.KICK: kick})
+        monitor.set_channels([TW, new, KI])
+        await monitor.cycle(poll=False)
+        await asyncio.sleep(0)
+        assert KI.key in sessions.started
+
+        # Removido do YAML: para só ele e some da lista.
+        monitor.set_channels([new, KI])
+        await monitor.cycle(poll=False)
+        assert sessions.stopped == [TW.key]
+        assert {s.channel.key for s in monitor.snapshot()} == {new.key, KI.key}
+
+        # Config de um canal gravando mudou (ex.: nome): grava de novo com a config nova.
+        renamed = Channel(login="novo", display_name="Novo Nome")
+        monitor.set_channels([renamed, KI])
+        await monitor.cycle(poll=False)
+        await asyncio.sleep(0)
+        assert sessions.stopped == [TW.key, new.key] and sessions.started.count(new.key) == 2
         await monitor._stop_all()
 
     asyncio.run(main())

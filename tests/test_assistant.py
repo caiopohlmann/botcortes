@@ -77,8 +77,7 @@ def test_loop_runs_queue_in_order_and_records_results() -> None:
         for _ in range(200):
             await asyncio.sleep(0.01)
             if all(
-                (r := store.get_assistant_request(i)) is not None
-                and r.status in ("done", "failed")
+                (r := store.get_assistant_request(i)) is not None and r.status in ("done", "failed")
                 for i in (first, second, third)
             ):
                 break

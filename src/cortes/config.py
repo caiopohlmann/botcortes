@@ -14,8 +14,9 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from cortes.domain.caption_quality import CaptionGrade, CaptionQualityParams
+from cortes.domain.caption_quality import CaptionQualityParams
 from cortes.domain.captions import CaptionParams
+from cortes.domain.clip_length import ShortClipParams
 from cortes.domain.detector import ClipParams, DetectorParams
 from cortes.domain.models import Channel, Platform, channel_key
 from cortes.domain.scoring import ScoreWeights, ScoringParams
@@ -60,12 +61,9 @@ class PathsSettings(_Model):
         return self.data_dir / "work"
 
     @property
-    def clips_pending(self) -> Path:
-        return self.data_dir / "clips" / "pending"
-
-    @property
-    def clips_approved(self) -> Path:
-        return self.data_dir / "clips" / "approved"
+    def clips(self) -> Path:
+        """Cortes prontos: data/clips/<criador>/<N>.mp4 (+ .txt), numerados em sequência."""
+        return self.data_dir / "clips"
 
     @property
     def logs(self) -> Path:
@@ -96,12 +94,10 @@ class TwitchSettings(_Model):
 
 
 class KickSettings(_Model):
-    # WebSocket (Pusher) que a página do Kick usa para o chat. Se o Kick trocar a chave,
-    # copie a URL nova do DevTools do navegador (aba Network -> WS) para cá.
-    pusher_url: str = (
-        "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679"
-        "?protocol=7&client=js&version=8.4.0&flash=false"
-    )
+    # Chat pelo mesmo WebSocket (Centrifugo) que a página do Kick usa. A URL do servidor
+    # vem da negociação em `realtime_api`; `realtime_url` é a reserva, se ela falhar.
+    realtime_api: str = "https://web.kick.com/api/v1/realtime"
+    realtime_url: str = "wss://realtime.us-west-2.platform.kick.com/connection/websocket"
     streamlink_args: list[str] = Field(default_factory=list)
     chat_delay_s: float = 0.0
 
@@ -243,14 +239,6 @@ class PublishSettings(_Model):
             Platform.YOUTUBE: [],
         }
     )
-    # Subpastas dentro da pasta de cada criador, pela qualidade da legenda.
-    quality_folders: dict[CaptionGrade, str] = Field(
-        default_factory=lambda: {
-            CaptionGrade.GOOD: "1-legenda-boa",
-            CaptionGrade.REVIEW: "2-legenda-revisar",
-            CaptionGrade.BAD: "3-legenda-ruim",
-        }
-    )
     title_max_chars: int = 90
     description_template: str = (
         "{title}\n\n"
@@ -272,6 +260,7 @@ class Settings(_Model):
     detection: ScoringParams = ScoringParams()
     detector: DetectorParams = DetectorParams()
     clip: ClipParams = ClipParams()
+    short_clip: ShortClipParams = ShortClipParams()  # corte de 30 s (domain/clip_length.py)
     scoring: ScoreWeights = ScoreWeights()
     audio: AudioSettings = AudioSettings()
     transcription: TranscriptionSettings = TranscriptionSettings()
@@ -349,6 +338,14 @@ def _check_unique_channels(channels: list[Channel]) -> None:
                 )
 
 
+def read_channels(path: Path) -> list[Channel]:
+    """Só a lista de canais de um channels.yaml, com as mesmas validações do load_settings."""
+    raw = _read_yaml(path).get("channels") or []
+    channels = Settings.model_validate({"channels": raw}).channels
+    _check_unique_channels(channels)
+    return channels
+
+
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for key, value in override.items():
@@ -385,6 +382,8 @@ def load_settings(secrets: Secrets | None = None) -> Settings:
 
     settings = Settings.model_validate(raw)
     _check_unique_channels(settings.channels)
+    # O monitor, o worker e o painel releem só esta lista quando o arquivo muda
+    # (cortes.channel_config.ChannelList); o resto do config vale até reiniciar.
     # Caminhos absolutos: os processos filhos e o FFmpeg (cwd diferente) enxergam o mesmo lugar.
     data_dir = settings.paths.data_dir
     if not data_dir.is_absolute():

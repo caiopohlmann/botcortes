@@ -244,7 +244,7 @@ def action_to_message(
     )
     raw_ts = renderer.get("timestampUsec")
     try:
-        server_ts = int(raw_ts) / 1_000_000
+        server_ts = int(str(raw_ts)) / 1_000_000  # None/lixo -> ValueError -> hora local
     except (TypeError, ValueError):
         server_ts = received_at
     local_ts, age = lag.to_local(server_ts, received_at)

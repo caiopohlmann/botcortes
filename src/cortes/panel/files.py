@@ -1,8 +1,9 @@
 """Navegação nas pastas de cortes (data/clips) para o painel, como um explorador de arquivos.
 
 Mostra as pastas reais do disco: se você mover ou apagar um corte no Windows, o painel
-reflete. Os dados de cada corte (nota, legenda, motivos) vêm do banco, pelo id no nome
-do arquivo. Nunca sai de `root` (caminhos com ".." ou absolutos são recusados).
+reflete. Os dados de cada corte (nota, legenda, motivos) vêm do banco, pelo caminho do
+arquivo (ou pelo id no nome, nos cortes do formato antigo). Nunca sai de `root`
+(caminhos com ".." ou absolutos são recusados).
 """
 
 from __future__ import annotations
@@ -10,6 +11,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from cortes.domain.models import clip_number
 
 README_NAME = "_LEIA-ME.txt"
 VIDEO_SUFFIX = ".mp4"
@@ -31,7 +34,8 @@ class FolderItem:
 class FileItem:
     name: str
     rel: str
-    clip_id: str
+    clip_id: str  # id pelo nome (formato antigo); o painel troca pelo do banco, se achar
+    path: Path  # caminho absoluto (é como o banco guarda o vídeo do corte)
     size_mb: float
     description_rel: str | None  # o .txt ao lado, se existir
 
@@ -65,6 +69,20 @@ def resolve(root: Path, rel: str) -> Path:
     return target
 
 
+def delete_clip_files(root: Path, rel: str) -> Path:
+    """Apaga o .mp4 de `rel` e o .txt ao lado. Devolve o caminho do vídeo apagado.
+
+    Só aceita um .mp4 dentro de root. O vídeo vai primeiro: se ele estiver aberto em
+    outro programa (o Windows recusa), nada é apagado e o OSError sobe.
+    """
+    video = resolve(root, rel)
+    if video.suffix.lower() != VIDEO_SUFFIX or not video.is_file():
+        raise BadPathError("corte não encontrado")
+    video.unlink()
+    video.with_suffix(".txt").unlink(missing_ok=True)
+    return video
+
+
 def _count_videos(folder: Path) -> int:
     try:
         return sum(1 for _ in folder.rglob(f"*{VIDEO_SUFFIX}"))
@@ -72,7 +90,8 @@ def _count_videos(folder: Path) -> int:
         return 0
 
 
-def list_folder(root: Path, rel: str, grade_by_folder: Mapping[str, str]) -> Listing:
+def list_folder(root: Path, rel: str, grade_by_folder: Mapping[str, str] | None = None) -> Listing:
+    grade_by_folder = grade_by_folder or {}
     folder = resolve(root, rel)
     if not folder.is_dir():
         raise BadPathError("pasta não encontrada")
@@ -109,11 +128,13 @@ def list_folder(root: Path, rel: str, grade_by_folder: Mapping[str, str]) -> Lis
                     name=entry.name,
                     rel=entry_rel,
                     clip_id=clip_id_from_name(entry.name),
+                    path=entry,
                     size_mb=size_mb,
                     description_rel=f"{rel_norm}/{txt.name}".strip("/") if txt.is_file() else None,
                 )
             )
-    files.sort(key=lambda f: f.name, reverse=True)  # nome começa pela data: mais novo primeiro
+    # Mais novo primeiro: número do corte (10 antes de 9) e, no formato antigo, a data no nome.
+    files.sort(key=lambda f: (clip_number(f.name) or 0, f.name), reverse=True)
 
     readme_path = folder / README_NAME
     readme = None

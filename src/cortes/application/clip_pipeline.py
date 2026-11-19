@@ -9,7 +9,10 @@ Ordem pensada para gastar GPU só com o que vale a pena:
   6. descrição sugerida com crédito ao canal + relatório da legenda;
   7. guarda o kit de edição (trecho + legenda editável) para ajustes depois.
 
-Organização: <output_dir>/<criador>/<pasta da qualidade>/<id>_notaNN.mp4 (+ .txt).
+Organização: <output_dir>/<criador>/<N>.mp4 (+ <N>.txt), numerados em sequência por criador
+(1, 2, 3...). O número nunca se repete, mesmo depois de você apagar os já publicados: vale o
+maior entre os arquivos da pasta e os cortes já registrados no banco. A qualidade da legenda
+vai no fim do .txt e no painel.
 `rerender()` gera o corte de novo a partir do kit (legenda corrigida, trecho ajustado).
 """
 
@@ -27,7 +30,6 @@ import structlog
 
 from cortes.application.edit_kit import read_kit, write_kit
 from cortes.domain.caption_quality import (
-    CaptionGrade,
     CaptionQuality,
     CaptionQualityParams,
     assess_captions,
@@ -35,6 +37,7 @@ from cortes.domain.caption_quality import (
     split_description,
 )
 from cortes.domain.captions import CaptionParams, chunk_words
+from cortes.domain.clip_length import ShortClipParams, choose_cut, cut_transcript, length_label
 from cortes.domain.models import (
     Channel,
     Clip,
@@ -43,6 +46,7 @@ from cortes.domain.models import (
     Platform,
     RenderRequest,
     Transcript,
+    next_clip_number,
 )
 from cortes.domain.ports import MediaProcessor, MomentStore, Transcriber
 from cortes.domain.publishing import build_description, build_hashtags, suggest_title
@@ -50,35 +54,12 @@ from cortes.domain.scoring import ScoreWeights, combine_scores
 
 log = structlog.get_logger(__name__)
 
-README_NAME = "_LEIA-ME.txt"
-
-QUALITY_HELP: dict[CaptionGrade, str] = {
-    CaptionGrade.GOOD: (
-        "LEGENDA BOA\n\n"
-        "Quase todas as palavras saíram com confiança alta no Whisper.\n"
-        "Dá para postar sem revisar a legenda (assistir antes nunca é demais)."
-    ),
-    CaptionGrade.REVIEW: (
-        "REVISAR A LEGENDA\n\n"
-        "Uma ou outra palavra duvidosa, idioma corrigido, trecho descartado ou corte sem fala.\n"
-        "Assista antes de postar. O motivo de cada corte está no fim do .txt dele e no painel.\n"
-        "Para corrigir: peça ao Claude pelo painel, ou edite transcript.json no kit de edição\n"
-        "e rode `uv run cortes rerender <id>`."
-    ),
-    CaptionGrade.BAD: (
-        "LEGENDA RUIM\n\n"
-        "Muitas palavras duvidosas ou texto repetido em loop (o Whisper 'alucinou').\n"
-        "Provavelmente a legenda precisa ser refeita antes de postar, ou o corte descartado.\n"
-        "Causas comuns: música alta, várias pessoas falando junto, fala em outro idioma."
-    ),
-}
-
 
 @dataclass(frozen=True, slots=True)
 class PipelineConfig:
     weights: ScoreWeights
     captions: CaptionParams
-    output_dir: Path  # <output_dir>/<criador>/<qualidade>/
+    output_dir: Path  # <output_dir>/<criador>/<N>.mp4
     work_root: Path  # pasta de trabalho do job = work_root / moment.id (vira o kit de edição)
     hashtags: tuple[str, ...]
     description_template: str
@@ -88,13 +69,7 @@ class PipelineConfig:
     min_duration_s: float = 10.0
     platform_hashtags: Mapping[Platform, tuple[str, ...]] = field(default_factory=dict)
     quality: CaptionQualityParams = field(default_factory=CaptionQualityParams)
-    quality_folders: Mapping[CaptionGrade, str] = field(
-        default_factory=lambda: {
-            CaptionGrade.GOOD: "1-legenda-boa",
-            CaptionGrade.REVIEW: "2-legenda-revisar",
-            CaptionGrade.BAD: "3-legenda-ruim",
-        }
-    )
+    short_clip: ShortClipParams = field(default_factory=ShortClipParams)
 
 
 class ClipPipeline:
@@ -118,6 +93,9 @@ class ClipPipeline:
         self._gpu = gpu_slots
         self._encode = encode_slots
         self._clock = clock
+        # Números reservados por jobs em andamento (dois slots podem terminar juntos).
+        self._numbering = asyncio.Lock()
+        self._reserved: dict[Path, set[int]] = {}
 
     # ------------------------------------------------------------------ corte novo
     async def process(self, moment_id: str) -> Clip | None:
@@ -159,9 +137,32 @@ class ClipPipeline:
                 self._transcriber.transcribe, pcm, self._media.sample_rate, channel.language
             )
         transcribe_s = time.perf_counter() - t1
-        quality = assess_captions(transcript, self._cfg.quality)
 
-        output = self._output_path(channel, quality.grade, f"{moment.id}_nota{round(final):02d}")
+        # 30 s (lance rápido, sem cortar fala) ou o trecho todo (1 min): ver domain/clip_length.
+        cut = choose_cut(
+            transcript.words,
+            moment.event_offset_in_clip_s,
+            duration,
+            moment.hype_s,
+            self._cfg.short_clip,
+        )
+        transcript = cut_transcript(transcript, cut)
+        offset, duration = offset + cut.offset_s, cut.duration_s
+        bound.info(
+            "clip_length",
+            short=cut.short,
+            duration_s=round(duration, 1),
+            hype_s=moment.hype_s,
+            reason=cut.reason,
+        )
+        quality = assess_captions(transcript, self._cfg.quality)
+        length_note = f"Duração: {duration:.0f} s ({cut.reason})"
+
+        # Job refeito (falhou depois de gravar o corte): reaproveita o mesmo número.
+        previous = await asyncio.to_thread(self._store.get_clip, moment.id)
+        output = await self._output_path(
+            channel, previous.video_path if previous else None, length_label(duration)
+        )
         t2 = time.perf_counter()
         await self._render(
             moment.source_path, offset, duration, transcript, channel, moment, output
@@ -182,7 +183,7 @@ class ClipPipeline:
         description_path = output.with_suffix(".txt")
         await asyncio.to_thread(
             description_path.write_text,
-            self._with_report(description, quality),
+            self._with_report(description, quality, length_note),
             "utf-8",
         )
 
@@ -247,7 +248,7 @@ class ClipPipeline:
         kit = await asyncio.to_thread(read_kit, self._work_dir(moment))
         channel = self._channel(moment.channel)
         quality = assess_captions(kit.transcript, self._cfg.quality)
-        output = self._output_path(channel, quality.grade, clip.video_path.stem)
+        output = await self._output_path(channel, clip.video_path)
 
         started = time.perf_counter()
         await self._render(
@@ -271,7 +272,9 @@ class ClipPipeline:
             )
         description_path = output.with_suffix(".txt")
         await asyncio.to_thread(
-            description_path.write_text, self._with_report(post, quality), "utf-8"
+            description_path.write_text,
+            self._with_report(post, quality, f"Duração: {kit.duration_s:.0f} s"),
+            "utf-8",
         )
         for old, new in ((clip.video_path, output), (clip.description_path, description_path)):
             if old.resolve() != new.resolve():
@@ -324,17 +327,34 @@ class ClipPipeline:
                 )
             )
 
-    def _output_path(self, channel: Channel, grade: CaptionGrade, stem: str) -> Path:
-        folder = self._cfg.output_dir / channel.folder_name / self._cfg.quality_folders[grade]
-        folder.mkdir(parents=True, exist_ok=True)
-        readme = folder / README_NAME
-        if not readme.exists():
-            readme.write_text(QUALITY_HELP[grade] + "\n", encoding="utf-8")
-        return folder / f"{stem}.mp4"
+    async def _output_path(self, channel: Channel, current: Path | None, label: str = "") -> Path:
+        """<criador>/<N>.mp4 ou "<N> (30s).mp4". Corte já na pasta do criador mantém o nome."""
+        folder = self._cfg.output_dir / channel.folder_name
+        await asyncio.to_thread(folder.mkdir, parents=True, exist_ok=True)
+        if current is not None and current.parent.resolve() == folder.resolve():
+            return current
+        async with self._numbering:
+            used = await asyncio.to_thread(self._used_names, folder)
+            reserved = self._reserved.setdefault(folder, set())
+            number = next_clip_number([*used, *(str(n) for n in reserved)])
+            reserved.add(number)
+        return folder / (f"{number} {label}.mp4" if label else f"{number}.mp4")
 
-    def _with_report(self, post: str, quality: CaptionQuality) -> str:
-        folder = self._cfg.quality_folders[quality.grade]
-        return f"{post.rstrip()}\n\n{quality_report(quality, folder)}"
+    def _used_names(self, folder: Path) -> list[str]:
+        """Nomes já usados na pasta: os arquivos de agora e os cortes do banco (apagados)."""
+        names = [entry.name for entry in folder.iterdir()]
+        target = folder.resolve()
+        for path in self._store.clip_video_paths():
+            if path.parent.resolve() == target:
+                names.append(path.name)
+        return names
+
+    def _with_report(self, post: str, quality: CaptionQuality, note: str = "") -> str:
+        """Texto do post + relatório da legenda (+ a duração escolhida e o motivo)."""
+        report = quality_report(quality)
+        if note:
+            report += f"{note}\n"
+        return f"{post.rstrip()}\n\n{report}"
 
     async def _reject(self, moment: Moment, final: float, reason: str) -> None:
         log.info("moment_rejected", moment=moment.id, final=round(final, 1), reason=reason)

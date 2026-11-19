@@ -29,7 +29,7 @@ _TMP_OUTPUT = "render.mp4"
 
 
 def _even(value: float) -> int:
-    return max(2, int(round(value / 2.0)) * 2)
+    return max(2, round(value / 2.0) * 2)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +73,9 @@ def build_filtergraph(
     graph = [
         f"[0:v]fps={r.fps},split={3 if facecam else 2}{branches}",
         f"[bg_in]scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},"
-        f"boxblur=6:2,scale={w}:{h},setsar=1[bg]",
+        # format=yuv420p antes do blur: com -hwaccel cuda os quadros chegam em nv12, e o
+        # boxblur (FFmpeg 9) trata nv12 errado: metade do croma zera e o fundo fica verde.
+        f"format=yuv420p,boxblur=6:2,scale={w}:{h},setsar=1[bg]",
         f"[gp_in]crop=w=iw*{frac}:h=ih:x=(iw-ow)/2:y=0,scale={w}:-2,setsar=1[gp]",
     ]
     if facecam and layout.facecam_y is not None:

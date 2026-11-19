@@ -5,7 +5,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from cortes.application.clip_pipeline import README_NAME, ClipPipeline, PipelineConfig
+from cortes.application.clip_pipeline import ClipPipeline, PipelineConfig
 from cortes.application.edit_kit import RENDER_FILE, TRANSCRIPT_FILE
 from cortes.domain.caption_quality import REPORT_SEPARATOR
 from cortes.domain.captions import CaptionParams
@@ -28,7 +28,7 @@ CHANNELS = {
 }
 
 GOOD_WORDS = (Word("olha", 0.0, 0.3, 0.97), Word("isso.", 0.3, 0.6, 0.95))
-BAD_WORDS = tuple(Word(w, i * 0.3, i * 0.3 + 0.2, 0.2) for i, w in enumerate("a b c d".split()))
+BAD_WORDS = tuple(Word(w, i * 0.3, i * 0.3 + 0.2, 0.2) for i, w in enumerate(["a", "b", "c", "d"]))
 
 
 class FakeStore:
@@ -58,6 +58,9 @@ class FakeStore:
 
     def get_clip(self, clip_id: str) -> Clip | None:
         return self.clips.get(clip_id)
+
+    def clip_video_paths(self) -> list[Path]:
+        return [clip.video_path for clip in self.clips.values()]
 
 
 class FakeMedia:
@@ -112,7 +115,9 @@ class Env:
             encode_slots=asyncio.Semaphore(1),
         )
 
-    def add(self, moment_id: str, channel: str, chat_score: float = 90) -> Moment:
+    def add(
+        self, moment_id: str, channel: str, chat_score: float = 90, hype_s: float | None = None
+    ) -> Moment:
         """Momento com o trecho dentro de work/<id>/source.ts, como o monitor grava."""
         source = self.work / moment_id / "source.ts"
         source.parent.mkdir(parents=True, exist_ok=True)
@@ -123,13 +128,14 @@ class Env:
             display_name=channel,
             peak_ts=1000.0,
             event_ts=1000.0,
-            start_ts=960.0,
-            end_ts=1015.0,
+            start_ts=957.0,  # 61 s em volta do lance (43 antes, 18 depois), como o monitor
+            end_ts=1018.0,
             chat_score=chat_score,
             source_path=source,
             source_start_ts=950.0,
             source_end_ts=1020.0,
             created_at=1000.0,
+            hype_s=hype_s,
         )
         self.store.add_moment(moment)
         return moment
@@ -146,7 +152,7 @@ def names(folder: Path) -> list[str]:
     return sorted(p.name for p in folder.iterdir())
 
 
-def test_one_folder_per_creator_then_per_caption_quality() -> None:
+def test_one_folder_per_creator_with_numbered_clips() -> None:
     env = Env()
     env.add("20261118-210000-twitch-fulano-aaaa", "twitch-fulano")
     env.add("20261118-220000-kick-fulano-bbbb", "kick-fulano")
@@ -157,35 +163,75 @@ def test_one_folder_per_creator_then_per_caption_quality() -> None:
         "20261118-230000-kick-ciclano-cccc",
     )
     assert names(env.pending) == ["Fulano", "ciclano"]
-    assert names(env.pending / "Fulano") == ["1-legenda-boa"]
-    good = env.pending / "Fulano" / "1-legenda-boa"
-    assert names(good) == [
-        "20261118-210000-twitch-fulano-aaaa_nota93.mp4",
-        "20261118-210000-twitch-fulano-aaaa_nota93.txt",
-        "20261118-220000-kick-fulano-bbbb_nota93.mp4",
-        "20261118-220000-kick-fulano-bbbb_nota93.txt",
-        README_NAME,
-    ]
-    assert "LEGENDA BOA" in (good / README_NAME).read_text(encoding="utf-8")
+    # Mesmo nome em duas plataformas = mesma pasta e mesma sequência. Sem subpastas.
+    assert names(env.pending / "Fulano") == ["1.mp4", "1.txt", "2.mp4", "2.txt"]
+    assert names(env.pending / "ciclano") == ["1.mp4", "1.txt"]
     clip = env.store.clips["20261118-210000-twitch-fulano-aaaa"]
+    assert clip.video_path == env.pending / "Fulano" / "1.mp4"
     assert clip.caption_grade == "boa" and clip.caption_score == 96.0
 
 
-def test_bad_captions_go_to_third_folder_with_report() -> None:
+def test_numbering_never_repeats_after_deleting_published_clips() -> None:
+    env = Env()
+    env.add("m1", "twitch-fulano")
+    env.add("m2", "twitch-fulano")
+    env.run("m1", "m2")
+    folder = env.pending / "Fulano"
+    for name in ("1.mp4", "1.txt", "2.mp4", "2.txt"):  # publicados e apagados pelo dono
+        (folder / name).unlink()
+    (folder / "4 so YT.mp4").write_bytes(b"mp4")  # arquivo do dono, com número próprio
+    (folder / "20261118-100000-twitch-fulano-zzzz_nota70.mp4").write_bytes(b"mp4")  # antigo
+    env.add("m3", "twitch-fulano")
+    env.run("m3")
+    assert env.store.clips["m3"].video_path.name == "5.mp4"
+
+    # Job refeito depois de gravar o corte: reaproveita o número, não cria outro.
+    env.run("m3")
+    assert sorted(p.name for p in folder.glob("*.mp4") if p.name[0] == "5") == ["5.mp4"]
+    assert env.store.clips["m3"].video_path.name == "5.mp4"
+
+
+def test_two_clips_finishing_together_get_different_numbers() -> None:
+    env = Env()
+    env.add("ma", "twitch-fulano")
+    env.add("mb", "twitch-fulano")
+
+    async def main() -> None:
+        await asyncio.gather(env.pipeline.process("ma"), env.pipeline.process("mb"))
+
+    asyncio.run(main())
+    assert {env.store.clips[m].video_path.name for m in ("ma", "mb")} == {"1.mp4", "2.mp4"}
+
+
+def test_quick_play_becomes_a_30s_clip_named_after_its_length() -> None:
+    env = Env()
+    env.add("m-rapido", "twitch-fulano", hype_s=5)  # chat explodiu e acalmou em 5 s
+    env.add("m-longo", "twitch-fulano", hype_s=25)
+    env.run("m-rapido", "m-longo")
+    quick, long_one = env.store.clips["m-rapido"], env.store.clips["m-longo"]
+    assert quick.video_path.name == "1 (30s).mp4" and quick.duration_s == 30.0
+    assert long_one.video_path.name == "2.mp4" and long_one.duration_s == 61.0
+    render = env.media.renders[0]
+    assert render.offset_s == 7.0 + 43.0 - 22.0 and render.duration_s == 30.0
+    text = quick.description_path.read_text(encoding="utf-8")
+    assert "Duração: 30 s (lance rápido" in text.split(REPORT_SEPARATOR)[1]
+    assert "Duração: 61 s (empolgação longa" in long_one.description_path.read_text("utf-8")
+
+
+def test_bad_captions_keep_the_report_in_the_txt() -> None:
     env = Env(words=BAD_WORDS)
     env.add("m-bad", "kick-ciclano")
     env.run("m-bad")
-    folder = env.pending / "ciclano" / "3-legenda-ruim"
-    text = next(folder.glob("m-bad*.txt")).read_text(encoding="utf-8")
+    text = (env.pending / "ciclano" / "1.txt").read_text(encoding="utf-8")
     post, report = text.split(REPORT_SEPARATOR)
     assert "kick.com/ciclano" in post and "#gta6 #kick #ciclano" in post
-    assert "Legenda: RUIM (pasta 3-legenda-ruim)" in report
+    assert "Legenda: RUIM" in report and "pasta" not in report
     assert "100% das palavras com confiança baixa" in report
     clip = env.store.clips["m-bad"]
     assert clip.caption_grade == "ruim" and clip.doubtful_words
 
 
-def test_edit_kit_is_kept_and_rerender_fixes_and_moves() -> None:
+def test_edit_kit_is_kept_and_rerender_keeps_the_same_file() -> None:
     env = Env(words=BAD_WORDS)
     env.add("m-fix", "twitch-fulano")
     env.run("m-fix")
@@ -212,9 +258,8 @@ def test_edit_kit_is_kept_and_rerender_fixes_and_moves() -> None:
 
     updated = asyncio.run(env.pipeline.rerender("m-fix"))
     assert updated.caption_grade == "boa"
-    assert updated.video_path.parent.name == "1-legenda-boa"
-    assert updated.video_path.name == old.video_path.name  # mesmo nome, outra pasta
-    assert not old.video_path.exists() and not old.description_path.exists()
+    assert updated.video_path == old.video_path  # mesmo número, mesma pasta
+    assert updated.video_path.is_file() and updated.description_path == old.description_path
     text = updated.description_path.read_text(encoding="utf-8")
     assert text.startswith("Meu título editado")  # texto do post preservado
     assert "Legenda: BOA" in text

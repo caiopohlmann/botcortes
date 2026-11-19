@@ -15,9 +15,17 @@ from cortes.adapters.recording.streamlink_ffmpeg import StreamlinkFfmpegRecorder
 from cortes.adapters.storage.sqlite_status import SqliteStatusStore
 from cortes.application.channel_session import ChannelSession, SessionConfig
 from cortes.application.live_monitor import LiveMonitor
+from cortes.channel_config import ChannelList
 from cortes.config import Secrets, Settings
 from cortes.domain.models import Channel, ChatRef, Controls, LiveStream, Platform
 from cortes.domain.ports import ChatSource, StreamStatusProvider
+from cortes.entrypoints.restart import (
+    SYSTEM,
+    PauseRequested,
+    RestartRequested,
+    watch_pause,
+    watch_restart,
+)
 from cortes.entrypoints.status import (
     MetricsRecorder,
     channel_status_dict,
@@ -27,6 +35,8 @@ from cortes.entrypoints.status import (
 from cortes.observability import HostSampler, error_counter
 
 log = structlog.get_logger(__name__)
+
+_CHANNELS_CHECK_S = 3.0  # de quanto em quanto tempo confere se channels.yaml mudou
 
 
 def _validate(settings: Settings) -> None:
@@ -72,9 +82,7 @@ def build_status_providers(
     return providers, closers
 
 
-def build_chat(
-    settings: Settings, ref: ChatRef, *, chat_hint: str | None = None
-) -> ChatSource:
+def build_chat(settings: Settings, ref: ChatRef, *, chat_hint: str | None = None) -> ChatSource:
     """Chat de uma plataforma. `chat_hint` = id já conhecido pelo status da live."""
     match ref.platform:
         case Platform.TWITCH:
@@ -82,10 +90,13 @@ def build_chat(
 
             return TwitchIrcChat(ref.login)
         case Platform.KICK:
-            from cortes.adapters.kick.chat import KickPusherChat
+            from cortes.adapters.kick.chat import KickRealtimeChat
 
-            return KickPusherChat(
-                ref.login, settings.kick.pusher_url, chatroom_id=ref.chat_id or chat_hint
+            return KickRealtimeChat(
+                ref.login,
+                settings.kick.realtime_api,
+                settings.kick.realtime_url,
+                chatroom_id=ref.chat_id or chat_hint,
             )
         case Platform.YOUTUBE:
             from cortes.adapters.youtube.chat import YouTubeLiveChat
@@ -98,6 +109,7 @@ def build_chat(
 
 
 async def run_monitor(settings: Settings, secrets: Secrets) -> None:
+    started_at = time.time()
     _validate(settings)
     paths = settings.paths
     # Buffers de uma execução anterior não têm mais utilidade (timeline em memória se perdeu).
@@ -160,6 +172,36 @@ async def run_monitor(settings: Settings, secrets: Secrets) -> None:
         offline_grace_polls=settings.monitor.offline_grace_polls,
         game_filter=settings.monitor.game_filter,
     )
+    channel_list = ChannelList(
+        settings.channels,
+        secrets.cortes_config_dir.resolve() / "channels.yaml",
+        name="monitor_channels",
+    )
+
+    async def watch_channels() -> None:
+        """Canal novo (ou removido) no channels.yaml entra sem reiniciar o monitor."""
+        known = tuple(settings.channels)
+        while True:
+            await asyncio.sleep(_CHANNELS_CHECK_S)
+            channels = await asyncio.to_thread(channel_list.current)
+            if channels == known:
+                continue
+            known = channels
+            missing = sorted({c.platform for c in channels} - set(providers), key=str)
+            for platform in missing:
+                only = [c for c in channels if c.platform is platform]
+                try:
+                    extra, extra_closers = build_status_providers(
+                        settings.model_copy(update={"channels": only}), secrets
+                    )
+                except Exception as exc:
+                    log.error("status_provider_failed", platform=platform.value, error=repr(exc))
+                    continue
+                providers.update(extra)
+                closers.extend(extra_closers)
+                monitor.add_providers(extra)
+            monitor.set_channels(channels)
+
     log.info(
         "monitor_started",
         channels=[c.key for c in settings.channels],
@@ -196,14 +238,29 @@ async def run_monitor(settings: Settings, secrets: Secrets) -> None:
             "log": error_counter.summary(),
             "min_free_gb": paths.min_free_gb,
             "poll_interval_s": settings.monitor.poll_interval_s,
+            # Versão do channels.yaml em uso (o painel avisa se ela ficar para trás).
+            "channels_loaded_at": channel_list.loaded_at,
+            "channels_error": channel_list.error,
         }
 
     try:
         async with asyncio.TaskGroup() as tg:
             tg.create_task(monitor.run())
+            tg.create_task(watch_channels())
             tg.create_task(
                 heartbeat_loop(store, "monitor", collect, interval_s=settings.panel.heartbeat_s)
             )
+            tg.create_task(watch_restart(lambda: store.restart_requested_at(SYSTEM), started_at))
+            tg.create_task(watch_pause(lambda: store.get_controls().system_paused))
+    except* PauseRequested:
+        # "Pausar tudo" no painel: mesma saída limpa (sessões fechadas, momento em andamento
+        # vai para a fila). O supervisor só sobe o monitor de novo no "Iniciar tudo".
+        log.info("monitor_paused")
+    except* RestartRequested:
+        # "Reiniciar sistema" no painel. As sessões já pararam (o TaskGroup cancelou
+        # monitor.run). Saída normal (código 0): o supervisor sobe o monitor de novo, relendo
+        # config/channels.yaml.
+        log.info("monitor_restarting")
     finally:
         for close in closers:
             with contextlib.suppress(Exception):

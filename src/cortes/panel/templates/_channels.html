@@ -1,58 +1,116 @@
 {% from "_macros.html" import pause_button with context %}
-<h2>Canais</h2>
+<div class="section-head">
+  <h2>Canais</h2>
+  <form method="post" action="/canais/verificar" data-json class="inline">
+    <button type="submit" class="btn-small" title="Consulta Twitch, Kick e YouTube agora, sem ligar nem gravar nada">Verificar ao vivo agora</button>
+    <span class="small" data-result></span>
+  </form>
+</div>
+{% if live_check %}<p class="muted small">Última verificação ({{ live_check.ago }}): {{ live_check.message }}</p>{% endif %}
 <div class="table-wrap">
 <table class="channels">
   <thead>
     <tr>
-      <th>Canal</th><th>Estado</th><th>Live</th><th>Chat</th><th>Gravação</th><th>Hoje</th><th></th>
+      <th>Canal</th><th>Estado</th><th>Ao vivo</th><th>Live</th><th>Chat</th><th>Gravação</th><th>Hoje</th><th></th>
     </tr>
   </thead>
   <tbody>
   {% for ch in channels %}
     <tr>
       <td data-label="Canal">
-        <strong>{{ ch.name }}</strong>
-        <span class="pill pill-{{ ch.platform_id }}">{{ ch.platform }}</span>
+        <div class="ch-title"><strong>{{ ch.name }}</strong><span class="pill pill-{{ ch.platform_id }}">{{ ch.platform }}</span></div>
         <div class="muted small">{{ ch.url }}</div>
         {% if ch.extra_chats %}<div class="muted small">+ chat: {{ ch.extra_chats | join(", ") }}</div>{% endif %}
       </td>
-      <td data-label="Estado">
-        <span class="badge tone-{{ ch.tone }}">{{ ch.state_label }}</span>
-        <div class="muted small">checado {{ ch.checked }}</div>
+      <td data-label="Estado" title="plataforma checada {{ ch.checked }}">
+        <span class="status st-{{ ch.tone }}">{{ ch.state_label }}</span>
         {% if ch.error and ch.state == "retrying" %}<div class="tone-text-bad small">{{ ch.error[:120] }}</div>{% endif %}
+      </td>
+      <td data-label="Ao vivo" title="{{ ch.live_note or '' }}{% if ch.live_note and ch.live_checked %} · {% endif %}{% if ch.live_checked %}verificado {{ ch.live_checked }}{% endif %}">
+        <span class="status st-{{ ch.live_tone }}">{{ ch.live_label }}</span>
+        {% if ch.live == "yes" and ch.live_for %}<div class="muted small nowrap">há {{ ch.live_for }}</div>{% endif %}
       </td>
       <td data-label="Live">
         {% if ch.title %}
           <div class="ellipsis" title="{{ ch.title }}">{{ ch.title }}</div>
-          <div class="muted small">
-            {% if ch.game %}{{ ch.game }} · {% endif %}{% if ch.viewers %}{{ ch.viewers }} assistindo · {% endif %}{% if ch.live_for %}há {{ ch.live_for }}{% endif %}
-          </div>
+          <div class="muted small ellipsis">{{ ch.game or "" }}{% if ch.game and ch.viewers %} · {% endif %}{% if ch.viewers %}{{ ch.viewers_fmt }} assistindo{% endif %}</div>
         {% else %}<span class="muted">—</span>{% endif %}
       </td>
-      <td data-label="Chat">
+      <td data-label="Chat" class="nowrap" {% if ch.state == "recording" %}title="nota {{ ch.chat_score }} · última mensagem {{ ch.last_message }}"{% endif %}>
         {% if ch.state == "recording" %}
-          {{ ch.chat_rate }} msg/s <span class="muted small">(normal {{ ch.chat_baseline }})</span>
-          <div class="muted small">nota {{ ch.chat_score }}{% if not ch.chat_warm %} · aquecendo{% endif %} · última msg {{ ch.last_message }}</div>
+          {{ ch.chat_rate }} msg/s
+          <div class="muted small">normal {{ ch.chat_baseline }}{% if not ch.chat_warm %} · aquecendo{% endif %}</div>
         {% else %}<span class="muted">—</span>{% endif %}
       </td>
-      <td data-label="Gravação">
+      <td data-label="Gravação" class="nowrap" {% if ch.state == "recording" %}title="último trecho de vídeo {{ ch.last_segment }}"{% endif %}>
         {% if ch.state == "recording" %}
           buffer {{ ch.buffered }}
-          <div class="muted small">último vídeo {{ ch.last_segment }}{% if ch.recorder_restarts %} · {{ ch.recorder_restarts }} reinício(s){% endif %}</div>
+          <div class="muted small">{% if ch.recorder_restarts %}{{ ch.recorder_restarts }} reinício(s){% else %}{{ ch.quality }}{% endif %}</div>
         {% else %}<span class="muted">—</span>{% endif %}
       </td>
-      <td data-label="Hoje">{{ ch.clips_today }} corte(s)<div class="muted small">{{ ch.moments_today }} pico(s)</div></td>
+      <td data-label="Hoje" class="nowrap">
+        {{ ch.clips_today }} corte{{ "s" if ch.clips_today != 1 }}
+        <div class="muted small">{{ ch.moments_today }} pico{{ "s" if ch.moments_today != 1 }}</div>
+      </td>
       <td data-label="">
-        {% if controls.paused_all %}
-          <span class="muted small">pausa geral</span>
-        {% else %}
-          {{ pause_button("/control/channel/" ~ ch.key, ch.paused_individually, "Pausar", "Retomar") }}
-        {% endif %}
+        <div class="actions">
+          {% if controls.system_paused or controls.paused_all %}
+            <span class="muted small">pausa geral</span>
+          {% else %}
+            {{ pause_button("/control/channel/" ~ ch.key, ch.paused_individually, "Pausar", "Retomar") }}
+          {% endif %}
+          <div class="seg" role="group" aria-label="Qualidade da gravação" title="Qualidade da gravação{% if ch.quality_from_panel %} (escolhida no painel){% endif %}">
+            {% for option in ch.quality_options %}
+            <form method="post" action="/control/channel/{{ ch.key }}/quality/{{ option }}" data-async
+                  {% if ch.state == "recording" %}data-confirm="Gravar {{ ch.name }} em {{ option }}? A gravação deste canal reinicia (alguns segundos sem gravar e o buffer de ~3 min dele recomeça). Os outros canais não são afetados."{% endif %}>
+              <button type="submit" {% if ch.quality == option %}class="btn-active" disabled aria-pressed="true"{% endif %}>{{ option }}</button>
+            </form>
+            {% endfor %}
+          </div>
+          {% if ch.quality_from_panel %}
+          <form method="post" action="/control/channel/{{ ch.key }}/quality/config" data-async
+                {% if ch.state == "recording" and ch.quality != ch.quality_config %}data-confirm="Voltar {{ ch.name }} para a qualidade do config ({{ ch.quality_config }})? A gravação deste canal reinicia."{% endif %}>
+            <button type="submit" class="btn-link small" title="config/channels.yaml: {{ ch.quality_config }}">usar o config ({{ ch.quality_config }})</button>
+          </form>
+          {% endif %}
+        </div>
       </td>
     </tr>
   {% else %}
-    <tr><td colspan="7" class="muted">Nenhum canal em config/channels.yaml.</td></tr>
+    <tr><td colspan="8" class="muted">Nenhum canal em config/channels.yaml.</td></tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
+
+<details class="add-channel">
+  <summary>+ Adicionar canal</summary>
+  <form class="add-channel-form" method="post" action="/canais" data-json data-reset data-close>
+    <label class="small" for="add-link">Link do canal</label>
+    <input id="add-link" name="link" type="text" required autocomplete="off"
+           placeholder="ex.: kick.com/fulano · twitch.tv/fulano · youtube.com/@fulano">
+    <div class="add-channel-row">
+      <div>
+        <label class="small" for="add-name">Nome nos créditos (opcional)</label>
+        <input id="add-name" name="display_name" type="text" maxlength="60" autocomplete="off"
+               placeholder="padrão: o nome do canal">
+      </div>
+      <div>
+        <label class="small" for="add-language">Idioma</label>
+        <select id="add-language" name="language">
+          <option value="pt" selected>Português</option>
+          <option value="en">Inglês</option>
+          <option value="">Detectar sozinho</option>
+        </select>
+      </div>
+    </div>
+    <div class="ask-actions">
+      <button type="submit" class="btn-primary">Adicionar e acompanhar</button>
+      <span class="small" data-result></span>
+    </div>
+    <p class="muted small">
+      O canal vai para o <code>config/channels.yaml</code> e o bot começa a acompanhar em alguns
+      segundos, sem reiniciar nada. Para tirar um canal, apague o trecho dele no arquivo.
+    </p>
+  </form>
+</details>

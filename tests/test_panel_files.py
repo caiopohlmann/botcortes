@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from cortes.panel.files import BadPathError, clip_id_from_name, list_folder, resolve
+from cortes.panel.files import (
+    BadPathError,
+    clip_id_from_name,
+    delete_clip_files,
+    list_folder,
+    resolve,
+)
 
 GRADES = {"1-legenda-boa": "boa", "2-legenda-revisar": "revisar", "3-legenda-ruim": "ruim"}
 
@@ -73,3 +79,29 @@ def test_paths_cannot_escape_root() -> None:
     with pytest.raises(BadPathError):
         list_folder(root, "pending/NaoExiste", GRADES)
     assert resolve(root, "/pending/Fulano/") == (root / "pending" / "Fulano").resolve()
+
+
+def test_delete_clip_files_removes_video_and_description() -> None:
+    root = make_tree()
+    folder = root / "pending" / "Fulano" / "1-legenda-boa"
+    rel = "pending/Fulano/1-legenda-boa/20261118-210000-twitch-fulano-aaaa_nota80.mp4"
+    deleted = delete_clip_files(root, rel)
+    assert deleted.name == "20261118-210000-twitch-fulano-aaaa_nota80.mp4"
+    assert not (folder / "20261118-210000-twitch-fulano-aaaa_nota80.mp4").exists()
+    assert not (folder / "20261118-210000-twitch-fulano-aaaa_nota80.txt").exists()
+    # o resto da pasta fica intacto
+    assert (folder / "20261118-220000-twitch-fulano-bbbb_nota70.mp4").exists()
+    assert (folder / "_LEIA-ME.txt").exists()
+
+
+def test_delete_clip_files_refuses_non_videos_and_escapes() -> None:
+    root = make_tree()
+    for rel in (
+        "pending/Fulano/1-legenda-boa/_LEIA-ME.txt",
+        "pending/Fulano/1-legenda-boa/nao-existe_nota10.mp4",
+        "pending/Fulano",
+        "../fora.mp4",
+    ):
+        with pytest.raises(BadPathError):
+            delete_clip_files(root, rel)
+    assert (root / "pending" / "Fulano" / "1-legenda-boa" / "_LEIA-ME.txt").exists()

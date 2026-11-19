@@ -32,12 +32,12 @@ o `CLAUDE.md` na raiz).
 
 | Etapa | O que entrega | Status |
 |---|---|---|
-| 1. MVP | canal(is) → detecção pelo chat → clipe 9:16 legendado em `data/clips/pending` | ✅ código pronto, falta validar no PC |
+| 1. MVP | canal(is) → detecção pelo chat → clipe 9:16 legendado em `data/clips/<criador>` | ✅ código pronto, falta validar no PC |
 | 1b. Plataformas | Kick e YouTube; multistream (um clipe, chats somados) | ✅ código pronto, falta validar no PC |
 | 1c. Servidor 24/7 | início automático, proteção de disco, limpeza, processos órfãos | ✅ código pronto, falta validar no PC |
 | 2a. Painel de acompanhamento | saúde do PC, canais/plataformas, cortes gerados, pausas, assistir/baixar cortes | ✅ código pronto, falta validar no PC |
 | 2b. Organização e ajustes | pastas por criador e por qualidade da legenda, navegação nas pastas no painel, kit de edição + `cortes rerender`, atalho "Pedir ao Claude" | ✅ código pronto, falta validar no PC |
-| 2c. Curadoria | aprovar/descartar no painel, mover para `approved/` | próximo |
+| 2c. Curadoria | cortes numerados por criador (1, 2, 3…); você apaga o que já publicou | ✅ |
 | 3. Escala | métricas agregadas, ajuste fino por canal | parcial (já roda N canais) |
 | 4. VPS | monitor na VPS + Redis Streams; Docker | futuro |
 
@@ -47,7 +47,7 @@ o `CLAUDE.md` na raiz).
 
 ```
 cortes run  (supervisor: sobe os três processos e reinicia quem cair)
-├── cortes panel    ── painel web em http://127.0.0.1:8080 (acompanha, pausa, pastas, "Pedir ao Claude")
+├── cortes panel    ── painel web em http://127.0.0.1:8080 (acompanha, pausa, canais, pastas, "Pedir ao Claude")
 ├── cortes monitor  ── leve, 24/7
 │     status (a cada 30 s): Twitch = API Helix | Kick e YouTube = como navegador
 │     canal ao vivo? → ChannelSession por canal:
@@ -60,13 +60,13 @@ cortes run  (supervisor: sobe os três processos e reinicia quem cair)
           → faster-whisper (palavras com timestamp e confiança) → legenda ASS estilo shorts
           → classifica a legenda: boa / revisar / ruim
           → FFmpeg: fundo desfocado + gameplay + facecam + legenda + crédito → NVENC
-          → data/clips/pending/<criador>/<qualidade>/<id>_notaNN.mp4 + .txt
+          → data/clips/<criador>/<N>.mp4 + .txt (N em sequência)
           → guarda o kit de edição (trecho + legenda editável) por 7 dias
 ```
 
 **O bot assiste a live inteira, mas só guarda os cortes.** Da live, fica no disco apenas um
 buffer dos últimos ~3 minutos, que vai sendo apagado e regravado sem parar. Quando o chat
-explode, o bot copia só aquele trecho (~55 s) para a fila. Se a nota final for baixa, o trecho
+explode, o bot copia só aquele trecho (~61 s) para a fila. Se a nota final for baixa, o trecho
 é apagado; se virar corte, o trecho fica 7 dias no kit de edição (para ajustes) e depois é
 apagado. A live completa nunca é salva.
 
@@ -161,7 +161,7 @@ uv run cortes render-file C:\videos\vod.mp4 --start 120 --duration 55 --channel 
 # canal de outra plataforma: --channel kick-fulano  |  --channel youtube-fulano
 ```
 
-O resultado vai para `data\clips\pending\<criador>\`. A primeira execução baixa o modelo do Whisper
+O resultado vai para `data\clips\<criador>\`. A primeira execução baixa o modelo do Whisper
 (~1,6 GB) para o cache do HuggingFace.
 
 ### 5. Rodar
@@ -249,7 +249,7 @@ precisam sumir junto. Se `process_guard_unavailable` aparecer no log, a proteç�
 
 **7. Kick e YouTube.** Adicione um canal ao vivo de cada plataforma:
 - Kick: `chat_connected` com `chatroom=<id>`, e `chat_signal` com `rate` > 0. Se aparecer
-  `kick_blocked` ou `Pusher recusou`, ver [Plataformas](#plataformas).
+  `kick_blocked` ou `o Kick recusou`, ver [Plataformas](#plataformas).
 - YouTube: `channel_live` com o título da live, `chat_connected` com `video=<id>`, e
   `chat_signal` com `rate` > 0. Compare o ritmo do chat com o da página aberta no navegador.
 
@@ -266,7 +266,9 @@ deve haver repetição de `recorder_failed` nem de `chat_error`.
   da live e o chat em msg/s;
 - CPU, RAM, disco, download e GPU com números, e os gráficos preenchendo (um ponto por minuto);
 - **Pausar** um canal: em até ~2 s ele vai para "Pausado" e os `ffmpeg`/`streamlink` dele
-  somem; **Retomar** volta a gravar. Teste também "Pausar tudo" e "Pausar cortes";
+  somem; **Retomar** volta a gravar. Teste também "Pausar tudo": em ~2 s monitor e worker
+  saem (somem do Gerenciador de Tarefas, a VRAM do worker é liberada) e o topo mostra
+  "Sistema pausado"; "Iniciar tudo" sobe os dois de novo e as lives voltam a gravar;
 - um corte gerado aparece em *Últimos cortes* e toca no navegador;
 - mate o worker no Gerenciador de Tarefas: em até 30 s o painel mostra "Problema", e depois
   o supervisor o reinicia (o painel mostra o reinício na última hora).
@@ -274,14 +276,14 @@ deve haver repetição de `recorder_failed` nem de `chat_error`.
 Se for usar pelo celular, siga [Acessar pelo celular](#acessar-pelo-celular).
 
 **10b. Pastas e "Pedir ao Claude".**
-- Em *Pastas de cortes*, navegue em `pending › <criador> › 1-legenda-boa` (ou revisar/ruim):
-  os vídeos tocam ali, com a nota, a classificação da legenda e os motivos.
-- Confira um `_LEIA-ME.txt` e o fim do `.txt` de um corte (relatório da legenda).
+- Em *Pastas de cortes*, abra a pasta de um criador: os cortes numerados (1, 2, 3…) tocam
+  ali, com a nota, a classificação da legenda e os motivos.
+- Confira o fim do `.txt` de um corte (relatório da legenda).
 - Instale o Claude Code no PC, rode `claude` uma vez no terminal e faça login (o atalho usa
   esse login).
-- Escolha um corte da pasta "revisar" e peça algo simples ("troca a palavra X por Y").
+- Escolha um corte com "Revisar legenda" e peça algo simples ("troca a palavra X por Y").
   Em 1-3 min o pedido deve ficar "Pronto", com a resposta do Claude; o vídeo é gerado de novo
-  e, se a legenda ficou boa, o corte muda para `1-legenda-boa`.
+  no mesmo arquivo (mesmo número) e a classificação da legenda é refeita.
 - Teste "Abrir conversa no terminal do PC": abre uma janela com a mesma conversa.
 - Se o Claude responder que não teve permissão para algo, veja `assistant` no README
   (permissões) e ajuste `adapters/assistant/claude_code.py` (`build_args`).
@@ -306,7 +308,7 @@ Pontos que foram escritos com base em documentação ou conhecimento prévio, se
 | Tolerância a anúncios da Twitch (120 s) | gravação reiniciando em loop durante anúncios | `recording.stall_timeout_s`, [Anúncios](#anúncios-da-twitch) |
 | JSON público do Kick (`kick.com/api/v2/channels/<slug>`) | `kick_status_failed`, `kick_blocked` | `adapters/kick/parsing.py`, `adapters/kick/api.py` |
 | API oficial do Kick (`api.kick.com/public/v1/channels`) | erro no status com credenciais definidas | `adapters/kick/parsing.py` (`parse_official_channels`) |
-| Chave/URL do WebSocket (Pusher) do chat do Kick | `chat_error` com `Pusher recusou` | `kick.pusher_url` no `settings.yaml` |
+| Negociação/token/WebSocket (Centrifugo) do chat do Kick | `chat_error` com `o Kick recusou` ou HTTP 4xx, `kick_realtime_negotiation_failed` | `kick.realtime_api` / `kick.realtime_url` no `settings.yaml`; formatos em `adapters/kick/parsing.py` |
 | Página `/live` do YouTube (`ytInitialPlayerResponse`) | `youtube_status_failed` / `PageFormatError` | `adapters/youtube/parsing.py` (`parse_live_page`) |
 | Chat interno do YouTube (`get_live_chat`) | `chat_error` no canal do YouTube | `adapters/youtube/parsing.py` e `chat.py` |
 | streamlink abre `kick.com/<canal>` e `youtube.com/@canal/live` | `recorder_failed` / "No plugin can handle URL" | atualizar o streamlink; ou trocar `Channel.watch_url` em `domain/models.py` |
@@ -361,7 +363,7 @@ horários das lives, para ele não reiniciar o PC no meio delas.
 | Sobras de jobs com erro (`data/work`) | apagadas após 24 h (`worker.work_retention_h`) | — |
 | Logs (`data/logs`) | rotacionam: 20 MB × 5 arquivos por processo | — |
 | Banco (`data/cortes.db`) | cresce pouco (KB por clipe) | — |
-| **Clipes (`data/clips/pending`)** | **não são apagados** | mover/apagar após a curadoria |
+| **Clipes (`data/clips/<criador>`)** | **não são apagados** | apague os já publicados (a numeração não se repete) |
 | Disco cheio | abaixo de `paths.min_free_gb` (20 GB) para de capturar clipes novos e registra `moment_skipped_disk_full`; avisa antes com `disk_space_low` | liberar espaço |
 | Processo travou/caiu | o supervisor reinicia monitor e worker; a tarefa agendada reinicia o supervisor | — |
 | Mudança no Kick/YouTube | não | ajustar o parser (ver [Pontos não verificados](#pontos-não-verificados)) |
@@ -377,28 +379,50 @@ na fila).
 
 `cortes run` sobe o painel junto. Abra **http://127.0.0.1:8080** no navegador do PC.
 
-| Seção | O que mostra |
+O painel tem três abas: **Painel** (o dia a dia), **PC e processos** e **Pastas de cortes**.
+
+| Seção (aba Painel) | O que mostra |
 |---|---|
-| Topo | **Tudo estável / Atenção / Problema**, com o motivo (processo parado, reinícios ou erros na última hora, disco enchendo, RAM alta, GPU quente, gravação sem vídeo novo). Botões **Pausar tudo** e **Pausar cortes** |
+| Topo | **Tudo estável / Atenção / Problema**, com o motivo (processo parado, reinícios ou erros na última hora, disco enchendo, RAM alta, GPU quente, gravação sem vídeo novo). Botões **Pausar tudo** / **Iniciar tudo** e **Reiniciar sistema** |
 | Números | cortes hoje, canais gravando, fila, há quanto tempo o PC está ligado |
-| Canais | cada canal configurado: plataforma, estado (gravando, offline, pausado, outro jogo, erro, sem resposta), título/jogo/espectadores, chat (msg/s e o "normal" do canal), saúde da gravação, picos e cortes de hoje, chats extras. Botão **Pausar/Retomar** por canal |
+| Canais | cada canal configurado: plataforma, estado (gravando, offline, pausado, outro jogo, erro, sem resposta), título/jogo/espectadores, chat (msg/s e o "normal" do canal), saúde da gravação, picos e cortes de hoje, chats extras. Coluna **Ao vivo**: se a pessoa está transmitindo, mesmo com o canal pausado (em amarelo, "sem gravar": é a hora de clicar em Retomar). Botão **Pausar/Retomar** e botões de **qualidade (1080p/720p)** por canal. Botão **Verificar ao vivo agora**: o painel consulta as plataformas na hora (uma consulta por canal, como um espectador) e preenche a coluna, mesmo com tudo pausado; não liga nem grava nada (cliques seguidos em 15 s reaproveitam a consulta). Embaixo, **+ Adicionar canal** pelo link |
 | Cortes | hoje, 7 dias, total, legendas boas/revisar/ruins, picos detectados, descartados por nota baixa, erros; gráfico de cortes por hora; últimos cortes com player, classificação da legenda, download, descrição e link para a pasta |
-| Pedir ao Claude | escolha um corte, escreva o que quer mudar e acompanhe o pedido (na fila, trabalhando, pronto) com a resposta do Claude |
-| PC e processos | monitor e worker (rodando há quanto tempo, reinícios, avisos/erros, RAM), CPU, RAM, disco, download, streamlink/FFmpeg abertos, GPU, VRAM, temperatura, gráficos de 24 h, jobs em processamento e os últimos avisos/erros |
+| Aba PC e processos | monitor e worker (rodando há quanto tempo, reinícios, avisos/erros, RAM), CPU, RAM, disco, download, streamlink/FFmpeg abertos, GPU, VRAM, temperatura, gráficos de 24 h, jobs em processamento e os últimos avisos/erros |
 
 A aba **Pastas de cortes** é um explorador das pastas reais de `data/clips`: Cortes ›
-pending › criador › qualidade. Em cada pasta de qualidade aparece o `_LEIA-ME.txt` explicando
-o critério; cada corte mostra o vídeo, a nota, a classificação da legenda com os motivos e as
+criador, com os cortes numerados do mais novo para o mais antigo; cada corte mostra o vídeo, a nota, a classificação da legenda com os motivos e as
 palavras duvidosas, e um campo para pedir ajuste ao Claude. Se você mover ou apagar arquivos
 no Windows, o painel mostra o que está no disco.
+
+**Qualidade por canal:** os botões **1080p / 720p** de cada canal valem na hora: se o canal
+estiver gravando, só a gravação dele reinicia (alguns segundos, e o buffer de ~3 min dele
+recomeça); pausado ou offline, vale na próxima live. A escolha fica no banco (`controls`,
+chave `quality:<canal>`) e vale mais que o `quality` do `channels.yaml`; "usar o config"
+volta para o do arquivo. 720p usa ~metade da internet (ver [Capacidade](#capacidade-quantos-canais-e-por-quanto-tempo)).
+
+**Adicionar canal:** cole o link (`twitch.tv/…`, `kick.com/…`, `youtube.com/@…` ou
+`youtube.com/channel/UC…`), o nome dos créditos (opcional) e o idioma. O painel confere na
+plataforma se o canal existe (uma consulta, como quem abre a página), recusa link errado ou
+canal repetido e acrescenta o canal no fim do `config/channels.yaml`, com um comentário de
+quando foi adicionado; o resto do arquivo não muda. Monitor e worker releem o arquivo
+sozinhos: o canal entra em alguns segundos, sem reiniciar nada. Para tirar um canal, apague o
+trecho dele no arquivo (também vale sem reiniciar). Se o arquivo ficar com erro, o bot segue
+com a lista anterior e o painel mostra o erro.
+
+O botão **Excluir corte** (com confirmação) apaga da pasta o `.mp4` e o `.txt` daquele corte,
+de vez (não vai para a Lixeira). Só os arquivos: o banco e o kit de edição não mudam. Antes,
+o navegador solta o vídeo do player; se o arquivo continuar em uso, o painel pausa a gravação
+e o worker por até ~15 s, apaga e volta tudo como estava (o que você já tinha pausado continua
+pausado). Se nem assim soltar (vídeo aberto em outro programa), o painel avisa.
 
 **O que cada pausa faz** (fica salva no banco: sobrevive a reinícios):
 
 | Botão | Efeito |
 |---|---|
 | Pausar (canal) | para de gravar e de ler o chat daquele canal em ~2 s. Retomar volta na hora, se ele ainda estiver ao vivo |
-| Pausar tudo | o mesmo para todos os canais (economiza internet). Os cortes da fila continuam sendo gerados |
-| Pausar cortes | o worker termina o corte atual e não pega o próximo; a gravação continua e a fila espera. Útil para liberar a GPU (jogar, por exemplo) |
+| Pausar tudo | desliga o serviço inteiro, menos o painel: o supervisor para monitor e worker em ~2 s (fecham gravações e chats; o corte em andamento volta para a fila e a GPU fica livre, inclusive a VRAM do Whisper). Ninguém consulta as plataformas, e os pedidos ao Claude esperam (o que já estava rodando termina). O buffer (~3 min) de cada live se perde. Só aparece com o bot aberto por `cortes run`; um `cortes run` aberto antes desta versão precisa ser fechado e aberto uma vez |
+| Iniciar tudo | o supervisor sobe monitor e worker de novo: quem estiver ao vivo volta a gravar e a fila volta a andar. As pausas por canal continuam como você deixou. Também desliga as pausas internas que tenham ficado ligadas |
+| Reiniciar sistema | o supervisor para monitor, worker e painel e sobe os três de novo, com o código e a configuração atuais (`config/*.yaml`). Monitor e worker saem limpos (o corte em andamento volta para a fila); quem não sair em 30 s, travado por exemplo, é encerrado à força, e o painel é encerrado na hora (um pedido ao Claude em andamento é interrompido). Leva ~5 a 10 s, perde o buffer de ~3 min de cada live, e a página recarrega sozinha quando o painel volta. Não conta como queda no painel. Use depois de mudar o `settings.yaml` ou atualizar o código, ou quando algo travar. Canais não precisam: o `channels.yaml` é relido sozinho (o painel só avisa se o monitor não pegar a versão nova). Só aparece com o bot aberto por `cortes run`; o próprio supervisor não reinicia (mudança em `supervisor.py` pede fechar e abrir o `cortes run`) |
 
 ### Acessar pelo celular
 
@@ -470,7 +494,7 @@ clipe, e um vídeo 720p tem 1280 px. Ou seja, ainda é *reduzido*, não ampliado
 | RAM | ~200 MB por live (streamlink + FFmpeg) + ~3 GB do worker | 16 GB dão para ~15+ lives |
 | CPU | quase zero por live (sem reencode) | o render usa CPU nos filtros, só durante o clipe |
 | VRAM | ~3 GB (Whisper) + ~0,5 GB por encode NVENC | fixo, não cresce com o número de canais |
-| GPU (clipes/hora) | estimado em 20-40 s de processamento por clipe de 55 s | 100+ clipes/hora; um canal gera em média 2-10 momentos/hora (no máximo ~40 por causa do `cooldown_s`). Veja `realtime_factor` no log `clip_rendered` |
+| GPU (clipes/hora) | estimado em 20-40 s de processamento por clipe de 1 min | 100+ clipes/hora; um canal gera em média 2-10 momentos/hora (no máximo ~40 por causa do `cooldown_s`). Veja `realtime_factor` no log `clip_rendered` |
 | Disco (escrita) | ~3,6 GB/hora por live em 1080p60 (o buffer é regravado; ocupa só ~180 MB) | SSD comum aguenta anos nesse ritmo |
 | Disco (espaço) | ~40-100 MB por clipe pronto | 50 clipes/dia ≈ 3-5 GB/dia |
 | Franquia de internet | ~3,6 GB/hora por live em 1080p60 (~1,8 GB em 720p) | banda larga fixa no Brasil normalmente é ilimitada |
@@ -486,7 +510,7 @@ acaba antes do PC.
 | | Status da live | Chat | Gravação | Credencial |
 |---|---|---|---|---|
 | Twitch | API oficial Helix | IRC anônimo (igual a quem não está logado) | streamlink | app da Twitch (grátis) |
-| Kick | JSON da página do canal; API oficial como reserva | WebSocket da página (Pusher) | streamlink | nenhuma (opcional: app do Kick) |
+| Kick | JSON da página do canal; API oficial como reserva | WebSocket da página (Centrifugo, token de visitante) | streamlink | nenhuma (opcional: app do Kick) |
 | YouTube | página `youtube.com/@canal/live` | o chat da página (sem API, sem cota) | streamlink | nenhuma |
 
 Kick e YouTube usam os mesmos endereços que o site usa para quem assiste, no ritmo de um
@@ -546,9 +570,13 @@ O Kick usa Cloudflare, que às vezes recusa acessos que não vêm de navegador. 
 2. A API oficial não informa o id do chat. Abra `https://kick.com/api/v2/channels/<canal>`
    no navegador, procure `"chatroom":{"id":...}` e coloque em `chat_id` no `channels.yaml`.
 
-Se o chat do Kick parar com `Pusher recusou`, o Kick trocou a chave do WebSocket: abra
-kick.com com o DevTools (*Network* → *WS*), copie a URL do `ws-*.pusher.com` e cole em
-`kick.pusher_url`.
+O chat do Kick usa o mesmo caminho da página para quem assiste sem login (desde 2026 o
+Kick trocou o Pusher pelo Centrifugo): o bot negocia o servidor em
+`kick.realtime_api`/channels/<id>/chat/connection, pega um token de visitante em
+`/auth/connection` (vale ~45 min e é renovado sozinho) e se inscreve em
+`chatrooms.<id>.v2`. Se o chat parar (`chat_error` com `o Kick recusou`, ou HTTP 4xx), abra
+kick.com deslogado com o DevTools (*Network* → *Fetch/XHR* e *WS*) e compare as URLs com
+`kick.realtime_api` e `kick.realtime_url`.
 
 ---
 
@@ -583,38 +611,48 @@ Com `facecam`, o layout fica: câmera no topo, gameplay embaixo e legenda abaixo
 
 ### Como os cortes são organizados
 
-Uma pasta por criador e, dentro dela, uma pasta por **qualidade da legenda**:
+Uma pasta por criador, com os cortes **numerados em sequência**:
 
 ```
-data/clips/pending/
+data/clips/
 ├── Fulano/
-│   ├── 1-legenda-boa/
-│   │   ├── _LEIA-ME.txt                                   ← explica o critério da pasta
-│   │   ├── 20261118-213045-twitch-fulano-a3f9_nota72.mp4
-│   │   └── 20261118-213045-twitch-fulano-a3f9_nota72.txt
-│   ├── 2-legenda-revisar/
-│   │   └── 20261118-224510-kick-fulano-1b2c_nota64.mp4 (+ .txt)
-│   └── 3-legenda-ruim/
-│       └── 20261118-183344-twitch-fulano-5be0_nota69.mp4 (+ .txt)
+│   ├── 4 so YT.mp4      ← arquivo seu, com número na frente: entra na sequência
+│   ├── 5.mp4
+│   ├── 5.txt            ← descrição sugerida + relatório da legenda no fim
+│   └── 6.mp4 (+ .txt)
 └── Ciclano/
-    └── 1-legenda-boa/
-        └── 20261118-221502-youtube-ciclano-07bc_nota55.mp4 (+ .txt)
+    └── 1.mp4 (+ .txt)
 ```
+
+**A numeração nunca se repete.** Depois de publicar, apague os arquivos à vontade: o próximo
+corte é o maior número já usado + 1, contando os arquivos da pasta e os cortes já registrados
+no banco (então, mesmo com a pasta vazia, depois do 3 vem o 4). Um corte ajustado pelo Claude
+ou pelo `rerender` continua no mesmo arquivo. Canais com o mesmo nome em plataformas
+diferentes dividem a pasta e a sequência.
+
+**30 s ou 1 minuto: o bot escolhe.** O monitor captura ~61 s em volta do lance (43 s antes,
+18 s depois). Depois do Whisper, o worker corta **30 s** quando a empolgação do chat foi
+rápida (até `short_clip.max_hype_s`, 12 s) **e** dá para cortar em volta do lance sem partir
+uma frase no meio; senão, fica o trecho todo (**1 min**). Corte com menos de 1 min leva a
+duração no nome (`5 (30s).mp4`): esses servem para o YouTube Shorts, não para o Creator Rewards
+do TikTok (que pede 1 min ou mais). O motivo da escolha fica no fim do `.txt` ("Duração: 30 s
+(lance rápido…)") e no log (`clip_length`). Ajuste em `short_clip` no `settings.yaml`
+(`enabled: false` = sempre 1 min).
 
 **Como a legenda é classificada.** O Whisper dá uma confiança (0-100%) para cada palavra.
 Sem um gabarito não dá para saber se a legenda está certa, mas dá para saber quando o modelo
 estava inseguro ou "alucinou":
 
-| Pasta | Quando | O que fazer |
+| Legenda | Quando | O que fazer |
 |---|---|---|
-| `1-legenda-boa` | até 10% de palavras duvidosas (confiança < 50%) e média ≥ 80% | pode postar |
-| `2-legenda-revisar` | 10-30% de palavras duvidosas, média 60-80%, idioma detectado errado e corrigido, trecho descartado como alucinação, ou corte sem fala | assista antes; corrija se precisar |
-| `3-legenda-ruim` | mais de 30% duvidosas, média < 60%, mesma palavra 5x seguidas ou texto repetitivo (Whisper em loop) | refaça a legenda ou descarte |
+| boa | até 10% de palavras duvidosas (confiança < 50%) e média ≥ 80% | pode postar |
+| revisar | 10-30% de palavras duvidosas, média 60-80%, idioma detectado errado e corrigido, trecho descartado como alucinação, ou corte sem fala | assista antes; corrija se precisar |
+| ruim | mais de 30% duvidosas, média < 60%, mesma palavra 5x seguidas ou texto repetitivo (Whisper em loop) | refaça a legenda ou descarte |
 
-Os limites são ajustáveis em `caption_quality` no `settings.yaml`; calibre olhando as pastas
-nas primeiras semanas. Os nomes das pastas estão em `publish.quality_folders`.
+A classificação aparece em cada corte no painel e no fim do `.txt`. Os limites são
+ajustáveis em `caption_quality` no `settings.yaml`; calibre nas primeiras semanas.
 
-**Avisos:** o motivo de cada corte aparece em três lugares: na pasta, no fim do `.txt`
+**Avisos:** o motivo de cada corte aparece em dois lugares: no fim do `.txt`
 (abaixo da linha "qualidade da legenda (não copiar daqui para baixo)", com as palavras
 duvidosas) e no painel.
 
@@ -645,8 +683,8 @@ Cada corte pronto guarda um **kit de edição** em `data/work/<id do corte>/` po
 
 Duas formas de corrigir:
 
-1. **Pelo painel, com o Claude** (mais fácil): escolha o corte em *Pedir ao Claude* (ou no
-   próprio corte, em *Pastas de cortes*) e escreva o que quer: "troca 'jogou' por 'pulou'",
+1. **Pelo painel, com o Claude** (mais fácil): abra o corte em *Pastas de cortes* e use
+   "Pedir ao Claude para ajustar este corte" e escreva o que quer: "troca 'jogou' por 'pulou'",
    "corta os 3 primeiros segundos", "muda o título para…". O painel chama o Claude Code deste
    PC em segundo plano (`claude -p`, sem abrir terminal). Ele edita o kit, roda o `rerender`
    e responde o que fez. Para acompanhar ou continuar a conversa, use "Abrir conversa no
@@ -672,8 +710,7 @@ Code neste PC, então cada pedido consome o seu uso. Configuração em `assistan
 
 | Pasta | Conteúdo |
 |---|---|
-| `data/clips/pending/<criador>/<qualidade>/` | clipes prontos e a descrição sugerida (`.txt`), por criador e por qualidade da legenda (ver [Como os cortes são organizados](#como-os-cortes-são-organizados)) |
-| `data/clips/approved/` | reservada para o painel de curadoria (etapa 2) |
+| `data/clips/<criador>/` | clipes prontos (`1.mp4`, `2.mp4`…) e a descrição sugerida (`.txt`), numerados em sequência por criador (ver [Como os cortes são organizados](#como-os-cortes-são-organizados)) |
 | `data/buffers/` | buffer das lives em gravação (apagado sozinho) |
 | `data/work/` | trechos esperando o worker e o kit de edição de cada corte (apagado após 7 dias) |
 | `data/logs/` | `run.log`, `monitor.log`, `worker.log`, `panel.log` (JSON, uma linha por evento) |
@@ -696,9 +733,10 @@ Code neste PC, então cada pedido consome o seu uso. Configuração em `assistan
 | `disk_space_low` / `moment_skipped_disk_full` | disco enchendo / cheio: liberar espaço |
 | `process_guard_unavailable` | proteção contra processos órfãos não ativou |
 | `channel_stopping` com `reason=pausado` | canal pausado pelo painel |
+| `system_paused` → `process_paused` / `system_resumed` → `process_resuming` | "Pausar tudo" / "Iniciar tudo" (supervisor); `system_paused_at_start` = o `cortes run` abriu com o sistema pausado |
 | `heartbeat_failed` | um processo não conseguiu publicar o estado para o painel (banco ocupado?) |
 | `session_crashed` | a sessão de um canal caiu por erro; volta sozinha em 30 s, 60 s, 2 min… |
-| `clip_rendered` com `caption=boa/revisar/ruim` | corte pronto e em qual pasta de qualidade caiu |
+| `clip_rendered` com `caption=boa/revisar/ruim` | corte pronto, com a classificação da legenda e o arquivo (`path`) |
 | `clip_rerendered` | corte gerado de novo pelo `rerender` (`moved=true` se mudou de pasta) |
 | `assistant_requested` → `assistant_started` → `assistant_done` / `assistant_failed` | pedido ao Claude pelo painel |
 
@@ -731,7 +769,7 @@ src/cortes/
 │                    #   edit_kit (kit de edição), assistant (fila do "Pedir ao Claude")
 ├── adapters/
 │   ├── twitch/      # Helix, chat IRC
-│   ├── kick/        # status (página/API oficial), chat Pusher
+│   ├── kick/        # status (página/API oficial), chat Centrifugo
 │   ├── youtube/     # status pela página /live, chat da página
 │   ├── recording/   # streamlink + ffmpeg (buffer circular), linha do tempo
 │   ├── media/       # ffmpeg (render 9:16), ASS, análise de áudio
@@ -760,7 +798,7 @@ scripts/registrar-tarefa.ps1   # início automático no Windows
 | Nenhum clipe | Rode com `signal_log_interval_s: 5` e veja se o `score` chega no `trigger_score`. |
 | Gravação reinicia durante anúncios | Suba `recording.stall_timeout_s` ou use conta Turbo/sub ([Anúncios](#anúncios-da-twitch)). |
 | `kick_blocked` / HTTP 403 no Kick | Ver [Kick bloqueado](#kick-bloqueado-http-403--kick_blocked-no-log). |
-| Chat do Kick com `Pusher recusou` | Atualize `kick.pusher_url` (DevTools → Network → WS). |
+| Chat do Kick com `o Kick recusou` / HTTP 4xx | Compare `kick.realtime_api`/`realtime_url` com o DevTools (kick.com deslogado → Network). |
 | `youtube_status_failed` / `PageFormatError` | Tela de consentimento ou layout novo do YouTube: abra a página `/live` do canal no navegador e compare com `adapters/youtube/parsing.py`. |
 | streamlink: `No plugin can handle URL` | Atualize o streamlink (`uv lock --upgrade-package streamlink` e `uv sync --extra cuda`). |
 | `moment_skipped_disk_full` | Libere espaço em `data/clips` ou ajuste `paths.min_free_gb`. |

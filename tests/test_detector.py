@@ -83,3 +83,19 @@ def test_clip_window_accounts_for_reaction() -> None:
     assert w.start_ts == 56
     assert w.end_ts == 111
     assert w.duration_s == 55
+
+
+def test_peak_carries_how_long_the_hype_lasted() -> None:
+    d = MomentDetector(PARAMS)
+    quick = [d.feed(sig(t, s)) for t, s in [(1, 90), (2, 95), (3, 60), (4, 10)]]
+    assert [p.hype_s for p in quick if p] == [3.0]  # disparou em 1, acalmou em 4
+
+    d = MomentDetector(PARAMS)
+    long_one = [d.feed(sig(t, 80)) for t in range(1, 40)]  # chat empolgado sem parar
+    assert [p.hype_s for p in long_one if p] == [30.0]  # fecha no max_episode_s
+
+    d = MomentDetector(PARAMS)
+    d.feed(sig(1, 90))
+    d.feed(sig(6, 70))
+    flushed = d.flush()  # a live acabou no meio
+    assert flushed is not None and flushed.hype_s == 5.0

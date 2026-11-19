@@ -139,9 +139,9 @@ def assess_captions(transcript: Transcript, params: CaptionQualityParams) -> Cap
     )
 
 
-def quality_report(quality: CaptionQuality, folder: str) -> str:
+def quality_report(quality: CaptionQuality) -> str:
     """Bloco de texto que vai no fim do .txt do corte (separado do texto do post)."""
-    lines = [REPORT_SEPARATOR, f"Legenda: {quality.grade.value.upper()} (pasta {folder})"]
+    lines = [REPORT_SEPARATOR, f"Legenda: {quality.grade.value.upper()}"]
     if quality.mean_probability is not None and quality.low_ratio is not None:
         lines.append(
             f"Confiança média {_pct(quality.mean_probability)} · "

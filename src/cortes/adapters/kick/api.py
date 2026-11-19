@@ -88,7 +88,9 @@ class KickOfficialClient:
             for attempt in range(2):
                 token = await self._ensure_token()
                 resp = await self._http.get(
-                    _OFFICIAL_API, params=params, headers={"Authorization": f"Bearer {token}"}
+                    _OFFICIAL_API,
+                    params=tuple(params),
+                    headers={"Authorization": f"Bearer {token}"},
                 )
                 if resp.status_code == 401 and attempt == 0:
                     self._token = None

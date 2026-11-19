@@ -148,6 +148,4 @@ class ClaudeCodeRunner:
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )  # fmt: skip
         else:
-            raise RuntimeError(
-                f"abrir terminal só no Windows; rode: claude --resume {session_id}"
-            )
+            raise RuntimeError(f"abrir terminal só no Windows; rode: claude --resume {session_id}")

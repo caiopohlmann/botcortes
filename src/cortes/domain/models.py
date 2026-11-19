@@ -6,10 +6,13 @@ Offsets "*_s" são segundos relativos a algum início (arquivo, clipe).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +57,74 @@ def normalize_login(platform: Platform, login: str) -> str:
     return login.casefold()
 
 
+_LINK_HOSTS = {
+    "twitch.tv": Platform.TWITCH,
+    "kick.com": Platform.KICK,
+    "youtube.com": Platform.YOUTUBE,
+}
+# Páginas do site que não são canais (ex.: twitch.tv/directory, kick.com/categories).
+_NOT_CHANNELS = {
+    Platform.TWITCH: {"directory", "videos", "search", "settings", "downloads", "p", "turbo"},
+    Platform.KICK: {"categories", "browse", "search", "following", "video", "dashboard"},
+}
+_LOGIN_RE = {
+    Platform.TWITCH: re.compile(r"[A-Za-z0-9_]{2,25}"),
+    Platform.KICK: re.compile(r"[A-Za-z0-9_-]{2,40}"),
+    Platform.YOUTUBE: re.compile(r"[A-Za-z0-9._-]{3,100}"),
+}
+
+
+def parse_channel_link(link: str) -> tuple[Platform, str]:
+    """Link de um canal -> (plataforma, login), no formato do channels.yaml.
+
+    Aceita twitch.tv/<login>, kick.com/<login>, youtube.com/@<handle> e
+    youtube.com/channel/UC..., com ou sem https://, www. e caminhos extras (/videos, /live).
+    """
+    text = link.strip()
+    if "://" not in text:
+        text = f"https://{text}"
+    parts = urlsplit(text)
+    host = (parts.hostname or "").casefold().removeprefix("www.").removeprefix("m.")
+    platform = _LINK_HOSTS.get(host)
+    if platform is None:
+        raise ValueError("cole o link de um canal da Twitch, do Kick ou do YouTube")
+    segments = [s for s in parts.path.split("/") if s]
+    if not segments:
+        raise ValueError(f"o link não tem o nome do canal (ex.: {host}/fulano)")
+    first = segments[0]
+    if platform is Platform.YOUTUBE:
+        if first.startswith("@"):
+            login = first[1:]
+        elif first == "channel" and len(segments) > 1 and is_youtube_channel_id(segments[1]):
+            login = segments[1]
+        else:
+            raise ValueError(
+                "no YouTube, use o link com @ (youtube.com/@canal) ou youtube.com/channel/UC..."
+            )
+    else:
+        login = first.lstrip("@")
+        if login.casefold() in _NOT_CHANNELS[platform]:
+            raise ValueError(f"{host}/{login} não é um canal")
+    if not _LOGIN_RE[platform].fullmatch(login):
+        raise ValueError(f"nome de canal inválido: {login}")
+    return platform, normalize_login(platform, login)
+
+
+# Número do corte no começo do nome do arquivo: "12.mp4", "4 so YT.mp4", "7_editado.mp4".
+# Nomes antigos ("20261118-213045-...") não contam: o número tem no máximo 5 dígitos.
+_CLIP_NUMBER_RE = re.compile(r"(\d{1,5})(?!\d)")
+
+
+def clip_number(name: str) -> int | None:
+    match = _CLIP_NUMBER_RE.match(name)
+    return int(match.group(1)) if match else None
+
+
+def next_clip_number(names: Iterable[str]) -> int:
+    """Próximo número da sequência de cortes de um criador (nunca repete um já usado)."""
+    return max((n for n in map(clip_number, names) if n is not None), default=0) + 1
+
+
 _UNSAFE_PATH_CHARS = set('<>:"/\\|?*')
 _RESERVED_NAMES = {
     "CON", "PRN", "AUX", "NUL",
@@ -64,9 +135,7 @@ _RESERVED_NAMES = {
 
 def safe_folder_name(name: str, fallback: str = "canal", max_len: int = 60) -> str:
     """Nome de pasta válido no Windows (e em qualquer sistema), legível para humanos."""
-    cleaned = "".join(
-        "_" if ch in _UNSAFE_PATH_CHARS or ord(ch) < 32 else ch for ch in name
-    )
+    cleaned = "".join("_" if ch in _UNSAFE_PATH_CHARS or ord(ch) < 32 else ch for ch in name)
     cleaned = " ".join(cleaned.split())[:max_len].strip(" .")
     if not cleaned or set(cleaned) <= {"_"}:
         cleaned = fallback
@@ -248,6 +317,7 @@ class Moment:
     status: MomentStatus = MomentStatus.QUEUED
     final_score: float | None = None
     error: str | None = None
+    hype_s: float | None = None  # duração da empolgação do chat (None = momento antigo)
 
     @property
     def clip_offset_s(self) -> float:
@@ -297,16 +367,40 @@ class Clip:
     doubtful_words: tuple[str, ...] = ()
 
 
+# Qualidades que o painel oferece por canal: nome do botão -> preferência do streamlink
+# (a primeira que a live tiver). Sem escolha no painel, vale o `quality` do canal no
+# channels.yaml e, sem ele, `recording.quality`.
+QUALITY_PRESETS: dict[str, str] = {
+    "1080p": "1080p60,1080p,936p60,720p60,best",
+    "720p": "720p60,720p,best",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class Controls:
-    """Pausas definidas pelo painel (persistem no banco entre reinícios)."""
+    """Pausas e preferências definidas pelo painel (persistem no banco entre reinícios)."""
 
+    # "Pausar tudo" do painel: o supervisor desliga monitor e worker até "Iniciar tudo".
+    system_paused: bool = False
+    # Pausas internas (o painel usa por ~15 s para soltar um arquivo ao excluir um corte).
     paused_all: bool = False  # para de gravar todos os canais
     worker_paused: bool = False  # para de gerar cortes (a fila espera)
     paused_channels: frozenset[str] = frozenset()  # Channel.key
+    # Qualidade escolhida no painel: Channel.key -> nome em QUALITY_PRESETS.
+    channel_quality: Mapping[str, str] = field(default_factory=dict)
 
     def channel_paused(self, key: str) -> bool:
-        return self.paused_all or key in self.paused_channels
+        return self.system_paused or self.paused_all or key in self.paused_channels
+
+    def quality_for(self, key: str) -> str | None:
+        """Preferência do streamlink escolhida no painel para o canal (None = a do config)."""
+        preset = self.channel_quality.get(key)
+        return QUALITY_PRESETS.get(preset) if preset else None
+
+    @property
+    def anything_paused(self) -> bool:
+        """Algo além das pausas por canal está ligado ("Iniciar tudo" desliga tudo isso)."""
+        return self.system_paused or self.paused_all or self.worker_paused
 
 
 @dataclass(frozen=True, slots=True)

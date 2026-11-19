@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pastas de cortes · cortesgta6</title>
-  <link rel="stylesheet" href="/static/panel.css">
+  <link rel="stylesheet" href="/static/panel.css?v=6">
 </head>
 <body{% if has_active %} data-refresh-page="10000"{% endif %}>
   {% from "_macros.html" import requests_list with context %}
@@ -24,7 +24,7 @@
         <pre>{{ listing.readme }}</pre>
       </div>
       {% elif listing.rel == "" %}
-      <p class="muted small">Cada criador tem uma pasta; dentro dela, os cortes ficam separados pela qualidade da legenda.</p>
+      <p class="muted small">Cada criador tem uma pasta, com os cortes numerados em sequência (1, 2, 3…). O número nunca se repete: pode apagar os já publicados. A qualidade da legenda aparece em cada corte.</p>
       {% endif %}
 
       {% if listing.folders %}
@@ -72,6 +72,11 @@
               <a href="/arquivos/raw?p={{ q(file.rel) }}" download>baixar vídeo</a>
               {% if file.description_rel %} · <a href="/arquivos/raw?p={{ q(file.description_rel) }}" target="_blank">descrição (.txt)</a>{% endif %}
             </p>
+            <form class="delete-clip" method="post" action="/arquivos/excluir?p={{ q(file.rel) }}" data-async data-reload data-release-video
+                  data-confirm="Excluir este corte? O vídeo e o .txt serão apagados da pasta de vez (não vão para a Lixeira).">
+              <button type="submit" class="btn-small btn-danger">Excluir corte</button>
+              <span class="small" data-result></span>
+            </form>
 
             {% if clip and assistant_enabled %}
             <details class="ask-inline">
@@ -98,6 +103,6 @@
       {% endif %}
     </section>
   </main>
-  <script src="/static/panel.js"></script>
+  <script src="/static/panel.js?v=3"></script>
 </body>
 </html>

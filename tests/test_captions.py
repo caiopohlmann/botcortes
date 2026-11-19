@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import itertools
+
 from cortes.domain.captions import CaptionParams, caption_events, chunk_words
 from cortes.domain.models import Word
 
@@ -37,7 +39,7 @@ def test_events_one_per_word_contiguous() -> None:
     events = caption_events(chunks, P)
     assert [e.highlight for e in events] == [0, 1, 2]
     assert all(e.words == ("UM", "DOIS", "TRES") for e in events)
-    for a, b in zip(events, events[1:], strict=False):
+    for a, b in itertools.pairwise(events):
         assert a.end == b.start  # sem "piscar" entre palavras
     assert events[-1].end == 1.0 + P.linger_s
 
@@ -45,5 +47,5 @@ def test_events_one_per_word_contiguous() -> None:
 def test_events_never_overlap_next_chunk() -> None:
     ws = words(("a", 0, 0.1), ("b", 0.1, 0.2), ("c", 0.2, 0.3), ("d", 0.4, 0.6))
     events = caption_events(chunk_words(ws, P), P)
-    for a, b in zip(events, events[1:], strict=False):
+    for a, b in itertools.pairwise(events):
         assert a.end <= b.start + 1e-9
